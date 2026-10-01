@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Ajustes · Etiquetas</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 980px; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 8px; display: flex; align-items: center; gap: 8px">
+    <button aria-label="Volver" style="width: 44px; height: 44px; border: 0; background: transparent; color: #16324F; display: grid; place-items: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"></path></svg></button>
+    <h1 style="flex-grow: 1; margin: 0; font: 700 22px/1 'Barlow Condensed', sans-serif">Etiquetas</h1>
+    <button style="min-height: 40px; padding: 0 14px; border: 0; border-radius: 8px; background: #1F5FAE; color: #FFFFFF; font: 700 16px 'Barlow Condensed', sans-serif">+ Nueva</button>
+  </header>
+  <main style="padding: 14px 16px; display: flex; flex-direction: column; gap: 12px">
+    <input type="search" placeholder="Buscar etiqueta" aria-label="Buscar etiqueta" style="min-height: 44px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 12px; font: 15px Barlow, sans-serif; background: #FFFFFF">
+    <p style="margin: 0; font-size: 14px; color: #52627A; line-height: 1.4">Los <b style="color: #16324F">alias</b> son las palabras que usas al hablar. Ayudan a Claude a elegir la etiqueta correcta cuando dictas.</p>
+    <sc-for list="{{sections}}" as="s" hint-placeholder-count="3">
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <h2 style="margin: 0; font: 700 18px 'Barlow Condensed', sans-serif; color: #52627A">{{s.type}}</h2>
+        <div style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 12px; padding: 0 12px">
+          <sc-for list="{{s.tags}}" as="t" hint-placeholder-count="3">
+            <div style="min-height: 56px; padding: 8px 0; border-bottom: 1px solid #EAF3FE; display: flex; align-items: center; gap: 10px">
+              <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px">
+                <span style="font-weight: 600; font-size: 15px; color: #1F5FAE">{{t.name}}</span>
+                <span style="font-size: 13px; color: #52627A">{{t.alias}}</span>
+              </div>
+              <span style="font-size: 13px; color: #52627A">{{t.count}}</span>
+              <button style="min-height: 36px; padding: 0 8px; border: 0; background: transparent; color: #1F5FAE; font: 600 14px Barlow, sans-serif">Editar</button>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+    </sc-for>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":980}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { sections: [
+      { type: 'Obras', tags: [
+        { name: '#Mallorca245', alias: 'Alias: Mallorca, la de Mallorca', count: '11' },
+        { name: '#Diagonal120', alias: 'Alias: Diagonal', count: '7' },
+        { name: '#NaveSabadell', alias: 'Alias: la nave, Sabadell', count: '5' }
+      ]},
+      { type: 'Industriales', tags: [
+        { name: '#Carpintería', alias: 'Alias: carpinteros, ventanas', count: '14' },
+        { name: '#Instalaciones', alias: 'Alias: instalador, clima, electricidad', count: '9' },
+        { name: '#Estructura', alias: 'Alias: hormigón, forjados', count: '6' }
+      ]},
+      { type: 'Acciones y otros', tags: [
+        { name: '#Seguridad', alias: 'Alias: línea de vida, EPIs', count: '2' },
+        { name: '#Certificación', alias: 'Sin alias', count: '3' }
+      ]}
+    ]};
+  }
+}
+</script>
+</body>
+</html>

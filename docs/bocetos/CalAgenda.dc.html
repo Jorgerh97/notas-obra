@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Calendario · Agenda móvil</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 1180px; position: relative; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px">
+    <div style="display: flex; align-items: center; gap: 10px">
+      <h1 style="flex-grow: 1; margin: 0; font: 700 26px/1.1 'Barlow Condensed', sans-serif">Calendario</h1>
+      <div style="display: flex; background: #F4F8FD; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+        <button style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Lista</button>
+        <button style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: #1F5FAE; color: #FFFFFF; font: 600 14px Barlow, sans-serif">Calendario</button>
+        <button style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Matriz</button>
+      </div>
+    </div>
+    <div style="display: flex; gap: 8px">
+      <div style="display: flex; background: #F4F8FD; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+        <button style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: #EAF3FE; color: #1F5FAE; font: 600 14px Barlow, sans-serif">Agenda</button>
+        <button style="min-height: 36px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Mes</button>
+      </div>
+      <select aria-label="Grupo filtrado" style="flex-grow: 1; min-height: 44px; border: 1px solid #9FB6D1; border-radius: 10px; padding: 0 8px; font: 600 14px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+        <option>Grupo: ninguno · todo</option>
+      </select>
+    </div>
+  </header>
+
+  <div style="padding: 12px 16px 0">
+    <div style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 12px; padding: 8px 6px; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; text-align: center">
+      <sc-for list="{{strip}}" as="s" hint-placeholder-count="7">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 0; border-radius: 8px; background: {{s.bg}}; outline: {{s.ring}}">
+          <span style="font-size: 12px; color: #52627A">{{s.d}}</span>
+          <span style="font: 700 17px/1 'Barlow Condensed', sans-serif; color: {{s.ink}}">{{s.n}}</span>
+          <span style="font-size: 11px; color: #52627A">{{s.c}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <main style="padding: 12px 16px 100px; display: flex; flex-direction: column; gap: 14px">
+    <div style="background: #FDECEC; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px">
+      <b style="color: #C62828; font-size: 15px">Atrasadas · 2</b>
+      <span style="font-size: 14px">Licencia de grúa (25 sep) · Revisar bajantes (26 sep)</span>
+    </div>
+    <sc-for list="{{days}}" as="d" hint-placeholder-count="4">
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <div style="display: flex; align-items: baseline; gap: 8px">
+          <h2 style="margin: 0; font: 700 19px/1 'Barlow Condensed', sans-serif; color: {{d.ink}}">{{d.label}}</h2>
+          <span style="font-size: 13px; color: #52627A">{{d.sub}}</span>
+        </div>
+        <sc-for list="{{d.items}}" as="i" hint-placeholder-count="2">
+          <article style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 10px 12px; display: flex; gap: 10px; align-items: center">
+            <span style="width: 64px; flex: none; font: 700 15px 'Barlow Condensed', sans-serif; color: {{i.pInk}}">{{i.kind}}</span>
+            <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+              <span style="font-size: 15px; font-weight: 600">{{i.title}}</span>
+              <span style="font-size: 13px; color: #52627A"><span style="display: inline-block; width: 8px; height: 8px; border-radius: 2px; background: {{i.pDot}}; margin-right: 5px"></span>{{i.prio}} · {{i.tag}}</span>
+            </div>
+          </article>
+        </sc-for>
+        <div style="font-size: 14px; color: #52627A; background: {{d.emptyBg}}; border-radius: 10px; padding: {{d.emptyPad}}">{{d.empty}}</div>
+      </section>
+    </sc-for>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var PR = {
+      C: { pDot: '#C62828', pInk: '#C62828', prio: 'Crítica' }, A: { pDot: '#FF7B0F', pInk: '#8A3D00', prio: 'Alta' },
+      N: { pDot: '#1F5FAE', pInk: '#1F5FAE', prio: 'Normal' }
+    };
+    function it(p, kind, title, tag) { return Object.assign({ kind: kind, title: title, tag: tag }, PR[p]); }
+    function day(label, sub, items, today, empty) {
+      return { label: label, sub: sub, items: items, ink: today ? '#1F5FAE' : '#16324F',
+        empty: empty || '', emptyBg: empty ? '#FFFFFF' : 'transparent', emptyPad: empty ? '12px' : '0' };
+    }
+    var days = [
+      day('Hoy · mar 29', '4 notas', [
+        it('N', '🔔 9:00', 'Reunión de obra', '#Diagonal120'),
+        it('A', '🔔 12:30', 'Llamar al industrial de clima', '#NaveSabadell'),
+        it('N', '🔔 17:00', 'Enviar acta a la DF', '#Mallorca245'),
+        it('C', '⚑ Límite', 'Revisar línea de vida', '#Mallorca245')
+      ], true),
+      day('Mañana · mié 30', '2 notas', [
+        it('C', '🔔 7:30', 'Confirmar hormigonado P3', '#Mallorca245'),
+        it('A', '⚑ Límite', 'Preparar certificación mensual', '#Mallorca245')
+      ]),
+      day('Jue 1 oct', '1 nota', [it('A', '🔔 9:00', 'Pedir oferta de carpintería', '#Mallorca245')]),
+      day('Vie 2 oct', '2 notas', [
+        it('A', '⚑ Límite', 'Pedir oferta de carpintería', '#Mallorca245'),
+        it('N', '⚑ Límite', 'Muestras de pavimento', '#Mallorca245')
+      ]),
+      day('Sáb 3 – Dom 4', '', [], false, 'Sin notas · hueco disponible')
+    ];
+    var LOAD = ['#FFFFFF', '#EAF3FE', '#CFE3FC', '#9FC6F5'];
+    var s = [['L', '28', 0, '—'], ['M', '29', 3, '4'], ['X', '30', 2, '2'], ['J', '1', 1, '1'], ['V', '2', 2, '2'], ['S', '3', 0, '—'], ['D', '4', 0, '—']];
+    var strip = s.map(function (x, k) { return { d: x[0], n: x[1], bg: LOAD[x[2]], c: x[3], ink: k === 1 ? '#1F5FAE' : '#16324F', ring: k === 1 ? '2px solid #1F5FAE' : 'none' }; });
+    return { days: days, strip: strip };
+  }
+}
+</script>
+</body>
+</html>

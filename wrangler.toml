@@ -1,0 +1,22 @@
+# Configuración del worker de Notas de obra (Cloudflare).
+# Los secretos ANTHROPIC_API_KEY y APP_TOKEN NO van aquí. Se guardan con:
+#   npx wrangler secret put ANTHROPIC_API_KEY
+#   npx wrangler secret put APP_TOKEN
+name = "notas-obra"
+main = "worker/worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[ai]
+binding = "AI"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "notas-obra-db"
+database_id = "84f6d093-2026-4e51-97ca-ef4f62b2b0bd"
+
+[triggers]
+crons = ["* * * * *"]       # cada minuto: alarmas, subida a Crítica y tarea diaria
+
+[vars]
+ALLOWED_ORIGIN = "https://jorgerh97.github.io"   # https://USUARIO_DE_GITHUB.github.io, sin ruta, en minúsculas

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Revisar notas dictadas</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 1360px; position: relative; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 8px; display: flex; align-items: center; gap: 8px">
+    <button style="min-height: 44px; padding: 0 10px; border: 0; background: transparent; color: #1F5FAE; font: 600 16px Barlow, sans-serif">Descartar</button>
+    <h1 style="flex-grow: 1; margin: 0; text-align: center; font: 700 22px/1 'Barlow Condensed', sans-serif; padding-right: 80px">Revisar dictado</h1>
+  </header>
+
+  <main style="padding: 16px 16px 130px; display: flex; flex-direction: column; gap: 14px">
+    <div style="background: #EAF3FE; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 4px">
+      <div style="font: 700 19px 'Barlow Condensed', sans-serif">Claude ha encontrado 3 notas</div>
+      <div style="font-size: 14px; color: #52627A">Revisa y corrige antes de guardar. Todo es editable.</div>
+    </div>
+
+    <details style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 0 14px">
+      <summary style="min-height: 44px; display: flex; align-items: center; font-weight: 600; font-size: 15px; color: #1F5FAE">Ver transcripción (1:24)</summary>
+    </details>
+
+    <sc-for list="{{notes}}" as="n" hint-placeholder-count="3">
+      <article style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+        <div style="display: flex; align-items: center; gap: 8px">
+          <span style="font-size: 13px; font-weight: 600; color: #52627A; flex-grow: 1">Nota {{n.num}}</span>
+          <span style="font-size: 13px; font-weight: 700; padding: 4px 10px; border-radius: 6px; border: 1px solid {{n.pBorder}}; background: {{n.pBg}}; color: {{n.pInk}}">{{n.prio}} ▾</span>
+          <label style="display: flex; align-items: center; gap: 6px; font-size: 14px; min-height: 36px"><input type="checkbox" checked style="width: 20px; height: 20px; accent-color: #1F5FAE">Incluir</label>
+        </div>
+        <input value="{{n.title}}" aria-label="Título" style="min-height: 42px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 10px; font: 600 16px Barlow, sans-serif; color: #16324F">
+        <textarea rows="2" aria-label="Nota" style="border: 1px solid #D6E2F0; border-radius: 8px; padding: 8px 10px; font: 15px/1.4 Barlow, sans-serif; color: #16324F; resize: none">{{n.body}}</textarea>
+        <div style="display: flex; gap: 6px; flex-wrap: wrap">
+          <sc-for list="{{n.tags}}" as="t" hint-placeholder-count="2">
+            <span style="font-size: 13px; font-weight: 600; padding: 4px 9px; border-radius: 6px; border: 1px dashed {{t.border}}; background: {{t.bg}}; color: {{t.ink}}">{{t.label}}</span>
+          </sc-for>
+        </div>
+        <div style="font-size: 13px; color: #52627A">{{n.hint}}</div>
+        <sc-for list="{{n.pending}}" as="p" hint-placeholder-count="0">
+          <div style="background: #FFF1E4; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px">
+            <div style="font-size: 14px; color: #16324F"><b style="color: #8A3D00">{{p.name}}</b> no existe. {{p.similar}}</div>
+            <div style="display: flex; gap: 6px; flex-wrap: wrap">
+              <button style="min-height: 36px; padding: 0 10px; border: 0; border-radius: 8px; background: #FF7B0F; color: #16324F; font: 600 14px Barlow, sans-serif">Crear {{p.name}}</button>
+              <button style="min-height: 36px; padding: 0 10px; border: 1px solid #9FB6D1; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Usar {{p.alt}}</button>
+              <button style="min-height: 36px; padding: 0 10px; border: 0; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Descartar</button>
+            </div>
+          </div>
+        </sc-for>
+        <div style="font-size: 14px; color: #52627A">{{n.meta}}</div>
+      </article>
+    </sc-for>
+    <div style="font-size: 13px; color: #52627A; line-height: 1.4">Claude usa primero tus etiquetas y sus alias. Solo propone una nueva (borde naranja) si ninguna encaja, y no se crea hasta que la confirmes.</div>
+  </main>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; background: #FFFFFF; border-top: 1px solid #D6E2F0; padding: 12px 16px 20px; display: flex; gap: 10px">
+    <button style="flex: 1; min-height: 52px; border: 1px solid #9FB6D1; border-radius: 10px; background: #FFFFFF; color: #16324F; font: 600 16px Barlow, sans-serif">Grabar más</button>
+    <button style="flex: 1.4; min-height: 52px; border: 0; border-radius: 10px; background: #1F5FAE; color: #FFFFFF; font: 700 18px 'Barlow Condensed', sans-serif">Guardar 3 notas</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1360}}'>
+class Component extends DCLogic {
+  renderVals() {
+    function tag(l, nuevo) {
+      return nuevo ? { label: '+ ' + l, border: '#FF7B0F', bg: '#FFF1E4', ink: '#8A3D00' }
+                   : { label: l, border: '#EAF3FE', bg: '#EAF3FE', ink: '#1F5FAE' };
+    }
+    var P = {
+      'Crítica': { pBorder: '#C62828', pBg: '#FDECEC', pInk: '#C62828' },
+      'Alta': { pBorder: '#FF7B0F', pBg: '#FFF1E4', pInk: '#8A3D00' },
+      'Normal': { pBorder: '#D6E2F0', pBg: '#FFFFFF', pInk: '#1F5FAE' }
+    };
+    var notes = [
+      Object.assign({ num: 1, prio: 'Crítica', title: 'Confirmar hormigonado forjado P3', body: 'Llamar a la planta y confirmar el camión a las 8:00.', tags: [tag('#Mallorca245'), tag('#Estructura')], hint: 'Oído: «la de Mallorca» → #Mallorca245', pending: [], meta: 'Encargado · Alarma mañana 7:30 · 10 min (por defecto) · Vence mié 30 sep' }, P['Crítica']),
+      Object.assign({ num: 2, prio: 'Alta', title: 'Pedir oferta de carpintería exterior', body: 'Tres industriales, incluir persianas de planta baja.', tags: [tag('#Mallorca245'), tag('#Carpintería')], hint: 'Oído: «los carpinteros» → #Carpintería', pending: [], meta: 'Jefe de producción · Vence vie 2 oct' }, P['Alta']),
+      Object.assign({ num: 3, prio: 'Normal', title: 'Revisar bajantes con el fontanero', body: 'Comprobar pasos de forjado antes de cerrar falsos techos.', tags: [tag('#Diagonal120'), tag('#Fontanería', true)], hint: 'Oído: «en Diagonal» → #Diagonal120', pending: [{ name: '#Fontanería', similar: 'La más parecida que ya tienes es #Instalaciones.', alt: '#Instalaciones' }], meta: 'Sin asignar · Alarma jue 1 oct 10:00 · 1 h (oído: «una hora con el fontanero»)' }, P['Normal'])
+    ];
+    return { notes: notes };
+  }
+}
+</script>
+</body>
+</html>

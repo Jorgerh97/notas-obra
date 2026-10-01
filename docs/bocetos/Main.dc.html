@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Lista en móvil</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 1060px; position: relative; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 8px 8px 10px 16px; display: flex; flex-direction: column; gap: 8px">
+    <div style="display: flex; align-items: center; gap: 4px">
+      <div style="flex-grow: 1; display: flex; align-items: baseline; gap: 8px">
+        <h1 style="margin: 0; font: 700 24px/1.1 'Barlow Condensed', 'Arial Narrow', sans-serif">Notas</h1>
+        <span style="font-size: 13px; color: #52627A">24 activas · 2 críticas</span>
+      </div>
+      <button aria-label="Buscar" style="width: 40px; height: 40px; border: 0; background: transparent; color: #16324F; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg></button>
+      <button aria-label="Menú" style="width: 40px; height: 40px; border: 0; background: transparent; color: #16324F; display: grid; place-items: center"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"></path></svg></button>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: #F4F8FD; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px; margin-right: 8px">
+      <button style="min-height: 34px; border: 0; border-radius: 8px; background: #1F5FAE; color: #FFFFFF; font: 600 14px Barlow, sans-serif">Lista</button>
+      <button style="min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Calendario</button>
+      <button style="min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Matriz</button>
+    </div>
+  </header>
+
+  <section style="padding: 10px 0 0 16px; display: flex; flex-direction: column; gap: 6px">
+    <div style="font: 600 12px/1 Barlow, sans-serif; letter-spacing: .6px; text-transform: uppercase; color: #52627A">Grupos filtrados</div>
+    <div style="display: flex; gap: 6px; overflow: hidden">
+      <sc-for list="{{views}}" as="v" hint-placeholder-count="5">
+        <button style="flex: none; min-height: 34px; padding: 0 12px; border-radius: 17px; font: 600 14px Barlow, sans-serif; border: 1px solid {{v.border}}; background: {{v.bg}}; color: {{v.ink}}">{{v.label}}</button>
+      </sc-for>
+    </div>
+  </section>
+
+  <section style="padding: 10px 16px 4px; display: flex; align-items: center; gap: 8px">
+    <span style="font-size: 13px; color: #52627A">Agrupar:</span>
+    <div style="display: flex; background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 8px; padding: 2px">
+      <button style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 6px; background: #EAF3FE; color: #1F5FAE; font: 600 13px Barlow, sans-serif">Fecha</button>
+      <button style="min-height: 32px; padding: 0 12px; border: 0; border-radius: 6px; background: transparent; color: #52627A; font: 600 13px Barlow, sans-serif">Etiqueta</button>
+    </div>
+    <span style="flex-grow: 1"></span>
+    <button style="min-height: 36px; padding: 0 10px; border: 1px solid #9FB6D1; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 13px Barlow, sans-serif">Filtros</button>
+  </section>
+
+  <main style="padding: 8px 16px 100px; display: flex; flex-direction: column; gap: 12px">
+    <sc-for list="{{groups}}" as="g" hint-placeholder-count="4">
+      <section style="display: flex; flex-direction: column; gap: 5px">
+        <div style="display: flex; align-items: baseline; gap: 6px">
+          <h2 style="margin: 0; font: 700 17px/1 'Barlow Condensed', sans-serif; color: {{g.ink}}">{{g.name}}</h2>
+          <span style="font-size: 12px; color: #52627A">{{g.count}}</span>
+        </div>
+        <sc-for list="{{g.notes}}" as="n" hint-placeholder-count="2">
+          <article style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 7px 10px 7px 4px; display: flex; gap: 2px; align-items: flex-start">
+            <label style="width: 34px; height: 34px; display: grid; place-items: center; flex: none">
+              <input type="checkbox" aria-label="Marcar como realizada" style="width: 18px; height: 18px; margin: 0; accent-color: #1F5FAE">
+            </label>
+            <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding-top: 3px">
+              <div style="display: flex; align-items: center; gap: 6px">
+                <span style="flex: none; width: 8px; height: 8px; border-radius: 2px; background: {{n.dot}}"></span>
+                <span style="font-weight: 600; font-size: 14px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{n.title}}</span>
+              </div>
+              <div style="font-size: 13px; color: #52627A; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{n.body}}</div>
+              <div style="font-size: 12px; color: #52627A; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="color: #1F5FAE; font-weight: 600">{{n.tags}}</span> · {{n.meta}}</div>
+            </div>
+          </article>
+        </sc-for>
+      </section>
+    </sc-for>
+  </main>
+
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; background: #FFFFFF; border-top: 1px solid #D6E2F0; padding: 10px 16px 18px; display: flex; gap: 10px">
+    <button style="flex: 1; min-height: 48px; border: 0; border-radius: 24px; background: #FF7B0F; color: #16324F; font: 700 17px 'Barlow Condensed', sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0M12 18v3"></path></svg>Dictar</button>
+    <button style="flex: 1; min-height: 48px; border: 0; border-radius: 24px; background: #1F5FAE; color: #FFFFFF; font: 700 17px 'Barlow Condensed', sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>Nueva nota</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1060}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var on = { border: '#1F5FAE', bg: '#1F5FAE', ink: '#FFFFFF' };
+    var off = { border: '#D6E2F0', bg: '#FFFFFF', ink: '#16324F' };
+    var views = ['Todas', 'Mallorca 245', 'Mallorca 245 · Urgentes', 'Encargado', 'Esta semana'].map(function (l, i) { return Object.assign({ label: l }, i === 0 ? on : off); });
+    var C = '#C62828', A = '#FF7B0F', N = '#1F5FAE', B = '#52627A';
+    function n(dot, title, body, tags, meta) { return { dot: dot, title: title, body: body, tags: tags, meta: meta }; }
+    var groups = [
+      { name: 'Atrasadas', count: '2', ink: '#C62828', notes: [
+        n(A, 'Solicitar licencia de grúa', 'Presentar en el ayuntamiento con el plano de ocupación y el seguro.', '#NaveSabadell', 'venció 25 sep'),
+        n(N, 'Revisar bajantes con el fontanero', 'Comprobar pasos de forjado antes de cerrar falsos techos.', '#Diagonal120', 'venció 26 sep')
+      ]},
+      { name: 'Hoy · mar 29', count: '3', ink: '#1F5FAE', notes: [
+        n(C, 'Revisar línea de vida en cubierta', 'Falta tramo junto al lucernario. 2 fotos adjuntas.', '#Mallorca245', 'Jefe de obra · límite hoy'),
+        n(N, 'Reunión de obra', 'Llevar PDF de pendientes y planning actualizado.', '#Diagonal120', '🔔 9:00 · 1 h 30 min'),
+        n(A, 'Llamar al industrial de clima', 'Confirmar fecha de montaje de máquinas en cubierta.', '#NaveSabadell', '🔔 12:30 · 10 min')
+      ]},
+      { name: 'Mañana · mié 30', count: '2', ink: '#16324F', notes: [
+        n(C, 'Confirmar hormigonado forjado P3', 'Llamar a la planta y confirmar el camión a las 8:00.', '#Mallorca245', 'Encargado · 🔔 7:30'),
+        n(A, 'Preparar certificación mensual', 'Mediciones de estructura y albañilería.', '#Mallorca245', 'Se repite cada mes')
+      ]},
+      { name: 'Esta semana', count: '2', ink: '#16324F', notes: [
+        n(A, 'Pedir oferta de carpintería exterior', 'Tres industriales. Incluir persianas de planta baja.', '#Mallorca245', 'vie 2 oct · 1/3'),
+        n(N, 'Muestras de pavimento', 'Pedir dos acabados para que elija la Propiedad.', '#Mallorca245', 'vie 2 oct')
+      ]},
+      { name: 'Sin fecha', count: '2', ink: '#52627A', notes: [
+        n(B, 'Fotos de avance para el archivo', 'Plantas 1 a 3, fachada principal y patio.', '#Mallorca245', 'Sin asignar'),
+        n(B, 'Revisar señalética provisional', 'Cartel de acceso deteriorado por la lluvia.', '#Seguridad', 'Encargado')
+      ]}
+    ];
+    return { views: views, groups: groups };
+  }
+}
+</script>
+</body>
+</html>

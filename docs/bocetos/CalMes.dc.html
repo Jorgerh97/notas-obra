@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Calendario · Mes</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden; display: flex; flex-direction: column">
+  <header style="flex: none; background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 10px 24px; display: flex; align-items: center; gap: 16px">
+    <h1 style="margin: 0; width: 226px; font: 700 28px/1 'Barlow Condensed', 'Arial Narrow', sans-serif">Notas</h1>
+    <div style="display: flex; background: #F4F8FD; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+      <button style="min-height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 15px Barlow, sans-serif">Lista</button>
+      <button style="min-height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: #1F5FAE; color: #FFFFFF; font: 600 15px Barlow, sans-serif">Calendario</button>
+      <button style="min-height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 15px Barlow, sans-serif">Matriz</button>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <button style="min-height: 44px; padding: 0 18px; border: 0; border-radius: 22px; background: #FF7B0F; color: #16324F; font: 700 17px 'Barlow Condensed', sans-serif">Dictar</button>
+    <button style="min-height: 44px; padding: 0 18px; border: 0; border-radius: 22px; background: #1F5FAE; color: #FFFFFF; font: 700 17px 'Barlow Condensed', sans-serif">+ Nueva nota</button>
+  </header>
+
+  <main style="flex-grow: 1; min-height: 0; padding: 16px 24px; display: flex; flex-direction: column; gap: 12px">
+    <div style="display: flex; align-items: center; gap: 10px">
+      <button aria-label="Mes anterior" style="width: 40px; height: 40px; border: 1px solid #D6E2F0; border-radius: 8px; background: #FFFFFF; color: #16324F; font-size: 18px">‹</button>
+      <button style="min-height: 40px; padding: 0 12px; border: 1px solid #D6E2F0; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Hoy</button>
+      <button aria-label="Mes siguiente" style="width: 40px; height: 40px; border: 1px solid #D6E2F0; border-radius: 8px; background: #FFFFFF; color: #16324F; font-size: 18px">›</button>
+      <h2 style="margin: 0 0 0 6px; font: 700 26px/1 'Barlow Condensed', sans-serif">Octubre 2026</h2>
+      <div style="flex-grow: 1"></div>
+      <label style="display: flex; align-items: center; gap: 8px; font: 600 14px Barlow, sans-serif; color: #52627A">Grupo filtrado
+        <select style="min-height: 40px; border: 2px solid #1F5FAE; border-radius: 8px; padding: 0 8px; font: 600 15px Barlow, sans-serif; color: #1F5FAE; background: #EAF3FE">
+          <option>Mallorca 245</option>
+        </select>
+      </label>
+      <div style="display: flex; background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+        <button style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Semana</button>
+        <button style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; background: #EAF3FE; color: #1F5FAE; font: 600 14px Barlow, sans-serif">Mes</button>
+      </div>
+    </div>
+
+    <div style="background: #EAF3FE; border: 1px solid #9FB6D1; border-radius: 10px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; font-size: 14px">
+      <b style="color: #1F5FAE">Mostrando solo: Mallorca 245</b>
+      <span style="color: #52627A">Los días vacíos pueden tener notas de otras obras.</span>
+      <span style="flex-grow: 1"></span>
+      <button style="min-height: 34px; padding: 0 12px; border: 1px solid #1F5FAE; border-radius: 8px; background: #FFFFFF; color: #1F5FAE; font: 600 14px Barlow, sans-serif">Quitar grupo · ver todo</button>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; font: 600 13px Barlow, sans-serif; color: #52627A; padding: 0 4px">
+      <sc-for list="{{dow}}" as="d" hint-placeholder-count="7"><span>{{d}}</span></sc-for>
+    </div>
+    <div style="flex-grow: 1; min-height: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); grid-template-rows: repeat(5, minmax(0, 1fr)); gap: 6px">
+      <sc-for list="{{cells}}" as="c" hint-placeholder-count="35">
+        <div style="border-radius: 8px; border: {{c.border}}; background: {{c.bg}}; padding: 6px 8px; display: flex; flex-direction: column; gap: 3px; overflow: hidden; opacity: {{c.op}}">
+          <span style="font: 700 15px 'Barlow Condensed', sans-serif; color: {{c.ink}}">{{c.n}}</span>
+          <sc-for list="{{c.items}}" as="i" hint-placeholder-count="1">
+            <span style="display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"><span style="flex: none; width: 7px; height: 7px; border-radius: 2px; background: {{i.dot}}"></span>{{i.t}}</span>
+          </sc-for>
+          <span style="font-size: 12px; color: #1F5FAE; font-weight: 600">{{c.more}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var C = '#C62828', A = '#FF7B0F', N = '#1F5FAE', B = '#52627A';
+    var LOAD = ['#FFFFFF', '#EAF3FE', '#CFE3FC', '#9FC6F5'];
+    var data = {
+      1: [[A, '9:00 Oferta carpintería']],
+      2: [[A, 'Oferta carpintería'], [N, 'Muestras pavimento']],
+      5: [[N, 'Replanteo tabiquería P3']],
+      6: [[C, 'Hormigonado forjado P4'], [N, 'Actualizar planning']],
+      8: [[A, 'Visita DF'], [N, 'Fotos de avance'], [B, 'Señalética'], [N, 'Pedido de bloques']],
+      13: [[N, 'Reunión instalaciones']],
+      15: [[A, 'Replanteo fachada'], [N, 'Pedir muestras']],
+      20: [[C, 'Hormigonado forjado P5'], [A, 'Revisión encofrados'], [N, 'Planning']],
+      22: [[N, 'Visita Propiedad']],
+      27: [[A, 'Oferta climatización']],
+      30: [[A, 'Certificación octubre'], [N, 'Cierre de mes']]
+    };
+    var cells = [];
+    for (var i = 0; i < 35; i++) {
+      // index 0 = Mon 28 Sep; Oct 1 = index 3
+      var day = i - 2, inMonth = day >= 1 && day <= 31;
+      var label = inMonth ? String(day) : (i < 3 ? String(28 + i) : String(day - 31));
+      var list = inMonth ? (data[day] || []) : [];
+      var lvl = Math.min(list.length, 3);
+      cells.push({
+        n: label, items: list.slice(0, 2).map(function (x) { return { dot: x[0], t: x[1] }; }),
+        more: list.length > 2 ? '+' + (list.length - 2) + ' más' : '',
+        bg: LOAD[lvl], op: inMonth ? '1' : '0.45',
+        border: '1px solid #D6E2F0', ink: '#16324F'
+      });
+    }
+    cells[1].border = '2px solid #1F5FAE'; cells[1].ink = '#1F5FAE'; cells[1].op = '0.8';
+    return { cells: cells, dow: ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'] };
+  }
+}
+</script>
+</body>
+</html>

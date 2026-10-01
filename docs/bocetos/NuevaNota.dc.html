@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Nueva nota</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 1400px; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 8px 8px; display: flex; align-items: center; gap: 8px">
+    <button style="min-height: 44px; padding: 0 10px; border: 0; background: transparent; color: #1F5FAE; font: 600 16px Barlow, sans-serif">Cancelar</button>
+    <h1 style="flex-grow: 1; margin: 0; text-align: center; font: 700 22px/1 'Barlow Condensed', sans-serif">Nueva nota</h1>
+    <button style="min-height: 44px; padding: 0 16px; border: 0; border-radius: 8px; background: #1F5FAE; color: #FFFFFF; font: 700 16px 'Barlow Condensed', sans-serif">Guardar</button>
+  </header>
+
+  <main style="padding: 16px; display: flex; flex-direction: column; gap: 18px">
+    <label style="display: flex; flex-direction: column; gap: 4px">
+      <span style="font-weight: 600; font-size: 15px">Título</span>
+      <input value="Pedir oferta de carpintería exterior" style="min-height: 46px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 12px; font: 16px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+    </label>
+    <div style="display: flex; flex-direction: column; gap: 4px; position: relative; z-index: 2">
+      <span style="font-weight: 600; font-size: 15px">Nota <span style="font-weight: 400; color: #52627A">· escribe # para etiquetar</span></span>
+      <div aria-label="Nota" style="border: 1px solid #1F5FAE; box-shadow: 0 0 0 2px #CFE3FC; border-radius: 8px; padding: 10px 12px; font: 16px/1.5 Barlow, sans-serif; color: #16324F; background: #FFFFFF; min-height: 96px; box-sizing: border-box">Pedir a tres industriales. Incluir persianas de planta baja. <span style="font-weight: 600; color: #1F5FAE; background: #EAF3FE; border-radius: 4px; padding: 0 3px">#Mallorca245</span> <span style="font-weight: 600; color: #1F5FAE; background: #EAF3FE; border-radius: 4px; padding: 0 3px">#Carpin</span><span style="display: inline-block; width: 2px; height: 18px; background: #1F5FAE; vertical-align: -3px"></span></div>
+      <div style="position: absolute; top: 100%; left: 12px; right: 12px; margin-top: 4px; background: #FFFFFF; border: 1px solid #9FB6D1; border-radius: 10px; box-shadow: 0 8px 24px rgba(22,50,79,.18); overflow: hidden">
+        <button style="width: 100%; min-height: 44px; border: 0; background: #EAF3FE; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font: 600 15px Barlow, sans-serif; color: #16324F"><span><span style="color: #1F5FAE">#Carpin</span>tería</span><span style="font-weight: 400; font-size: 13px; color: #52627A">14 notas</span></button>
+        <button style="width: 100%; min-height: 44px; border: 0; border-top: 1px solid #EAF3FE; background: #FFFFFF; padding: 0 12px; display: flex; align-items: center; justify-content: space-between; font: 600 15px Barlow, sans-serif; color: #16324F"><span><span style="color: #1F5FAE">#Carpin</span>teríaInterior</span><span style="font-weight: 400; font-size: 13px; color: #52627A">3 notas</span></button>
+        <button style="width: 100%; min-height: 44px; border: 0; border-top: 1px solid #EAF3FE; background: #FFFFFF; padding: 0 12px; display: flex; align-items: center; gap: 6px; font: 600 15px Barlow, sans-serif; color: #8A3D00">+ Crear etiqueta nueva «Carpin»</button>
+      </div>
+    </div>
+
+    <section style="display: flex; flex-direction: column; gap: 6px">
+      <span style="font-weight: 600; font-size: 15px">Prioridad</span>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px">
+        <button style="min-height: 44px; border-radius: 10px; font: 600 14px Barlow, sans-serif; border: 1px solid #D6E2F0; background: #FFFFFF; color: #C62828">Crítica</button>
+        <button style="min-height: 44px; border-radius: 10px; font: 700 14px Barlow, sans-serif; border: 2px solid #FF7B0F; background: #FFF1E4; color: #8A3D00">Alta</button>
+        <button style="min-height: 44px; border-radius: 10px; font: 600 14px Barlow, sans-serif; border: 1px solid #D6E2F0; background: #FFFFFF; color: #1F5FAE">Normal</button>
+        <button style="min-height: 44px; border-radius: 10px; font: 600 14px Barlow, sans-serif; border: 1px solid #D6E2F0; background: #FFFFFF; color: #52627A">Baja</button>
+      </div>
+    </section>
+
+    <section style="display: flex; flex-direction: column; gap: 6px">
+      <span style="font-weight: 600; font-size: 15px">Etiquetas de la nota <span style="font-weight: 400; color: #52627A">· se leen del texto</span></span>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center">
+        <span style="font-size: 14px; font-weight: 600; padding: 6px 10px; border-radius: 6px; background: #EAF3FE; color: #1F5FAE">#Mallorca245</span>
+        <span style="font-size: 14px; font-weight: 600; padding: 6px 10px; border-radius: 6px; border: 1px dashed #9FB6D1; color: #52627A">#Carpin… escribiendo</span>
+      </div>
+    </section>
+
+    <label style="display: flex; flex-direction: column; gap: 4px">
+      <span style="font-weight: 600; font-size: 15px">Asignar a <span style="font-weight: 400; color: #52627A">(opcional)</span></span>
+      <select style="min-height: 46px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 10px; font: 16px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+        <option>Jefe de producción</option>
+      </select>
+    </label>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px">
+      <label style="display: flex; flex-direction: column; gap: 4px">
+        <span style="font-weight: 600; font-size: 15px">Fecha límite</span>
+        <input value="Vie 2 oct" style="min-height: 46px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 12px; font: 16px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+      </label>
+      <label style="display: flex; flex-direction: column; gap: 4px">
+        <span style="font-weight: 600; font-size: 15px">Alarma</span>
+        <input value="Jue 1 oct · 9:00" style="min-height: 46px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 12px; font: 16px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+      </label>
+    </div>
+    <label style="display: flex; flex-direction: column; gap: 4px">
+      <span style="font-weight: 600; font-size: 15px">Duración <span style="font-weight: 400; color: #52627A">(opcional · ocupa hueco en el calendario)</span></span>
+      <div style="display: flex; gap: 6px; flex-wrap: wrap">
+        <button style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 2px solid #1F5FAE; background: #EAF3FE; color: #1F5FAE; font: 700 14px Barlow, sans-serif">10 min</button>
+        <button style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #D6E2F0; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">30 min</button>
+        <button style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #D6E2F0; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">1 h</button>
+        <button style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #D6E2F0; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">2 h</button>
+        <button style="min-height: 40px; padding: 0 12px; border-radius: 8px; border: 1px solid #D6E2F0; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Otra…</button>
+      </div>
+      <span style="font-size: 13px; color: #52627A">Si no eliges nada, se reservan 10 minutos.</span>
+    </label>
+    <label style="display: flex; align-items: center; gap: 10px; font-size: 15px"><input type="checkbox" checked style="width: 20px; height: 20px; accent-color: #1F5FAE">Subir a Crítica si faltan 24 h para la fecha límite</label>
+
+    <label style="display: flex; flex-direction: column; gap: 4px">
+      <span style="font-weight: 600; font-size: 15px">Repetir</span>
+      <select style="min-height: 46px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 10px; font: 16px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+        <option>No se repite</option>
+      </select>
+    </label>
+
+    <section style="display: flex; flex-direction: column; gap: 6px">
+      <span style="font-weight: 600; font-size: 15px">Checklist</span>
+      <div style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 8px; padding: 4px 12px">
+        <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; color: #52627A; text-decoration: line-through"><input type="checkbox" checked style="width: 20px; height: 20px; accent-color: #1F5FAE">Industrial 1</label>
+        <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; border-top: 1px solid #D6E2F0"><input type="checkbox" style="width: 20px; height: 20px; accent-color: #1F5FAE">Industrial 2</label>
+        <label style="display: flex; align-items: center; gap: 10px; min-height: 44px; font-size: 15px; border-top: 1px solid #D6E2F0"><input type="checkbox" style="width: 20px; height: 20px; accent-color: #1F5FAE">Industrial 3</label>
+        <button style="min-height: 44px; border: 0; border-top: 1px solid #D6E2F0; background: transparent; color: #1F5FAE; font: 600 15px Barlow, sans-serif; width: 100%; text-align: left; padding: 0">+ Añadir punto</button>
+      </div>
+    </section>
+
+    <section style="display: flex; flex-direction: column; gap: 6px">
+      <span style="font-weight: 600; font-size: 15px">Fotos</span>
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+        <div style="aspect-ratio: 1; border-radius: 8px; background: #EAF3FE; display: grid; place-items: center; font-size: 13px; color: #52627A">Foto 1</div>
+        <button style="aspect-ratio: 1; border-radius: 8px; border: 2px dashed #9FB6D1; background: transparent; color: #1F5FAE; font: 600 14px Barlow, sans-serif">+ Foto</button>
+      </div>
+    </section>
+
+    <button style="min-height: 48px; border: 1px solid #9FB6D1; border-radius: 10px; background: #FFFFFF; color: #16324F; font: 600 15px Barlow, sans-serif; display: flex; align-items: center; justify-content: center; gap: 8px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="M3 7l9 6 9-6"></path></svg>Enviar por correo</button>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":1400}}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

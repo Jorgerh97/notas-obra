@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Historial y papelera</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 900px; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 8px; display: flex; align-items: center; gap: 8px">
+    <button aria-label="Volver" style="width: 44px; height: 44px; border: 0; background: transparent; color: #16324F; display: grid; place-items: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"></path></svg></button>
+    <h1 style="margin: 0; font: 700 22px/1 'Barlow Condensed', sans-serif">Historial</h1>
+  </header>
+  <div style="padding: 12px 16px 0">
+    <div style="display: flex; background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+      <button style="flex: 1; min-height: 40px; border: 0; border-radius: 8px; background: #EAF3FE; color: #1F5FAE; font: 600 15px Barlow, sans-serif">Realizadas · 86</button>
+      <button style="flex: 1; min-height: 40px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 15px Barlow, sans-serif">Papelera · 3</button>
+    </div>
+  </div>
+  <main style="padding: 14px 16px; display: flex; flex-direction: column; gap: 12px">
+    <div style="background: #FFF1E4; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px">
+      <div style="font-weight: 600; font-size: 15px; color: #8A3D00">4 notas realizadas se borrarán el 15 de octubre</div>
+      <div style="font-size: 14px; color: #16324F">Se cumple un año desde que las diste por hechas.</div>
+      <div style="display: flex; gap: 8px">
+        <button style="min-height: 40px; padding: 0 12px; border: 1px solid #9FB6D1; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Ver cuáles</button>
+        <button style="min-height: 40px; padding: 0 12px; border: 1px solid #9FB6D1; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Exportar</button>
+        <button style="min-height: 40px; padding: 0 12px; border: 1px solid #9FB6D1; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Conservar</button>
+      </div>
+    </div>
+    <input type="search" placeholder="Buscar en realizadas" aria-label="Buscar en realizadas" style="min-height: 44px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 12px; font: 15px Barlow, sans-serif; background: #FFFFFF">
+    <sc-for list="{{items}}" as="i" hint-placeholder-count="4">
+      <article style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 12px; padding: 12px 14px; display: flex; gap: 10px; align-items: flex-start">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#1F5FAE" stroke-width="2.4" stroke-linecap="round" style="flex: none; margin-top: 1px"><path d="M5 12l5 5 9-10"></path></svg>
+        <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px">
+          <span style="font-size: 15px; font-weight: 600">{{i.title}}</span>
+          <span style="font-size: 13px; color: #52627A">{{i.sub}}</span>
+        </div>
+        <button style="min-height: 36px; padding: 0 8px; border: 0; background: transparent; color: #1F5FAE; font: 600 14px Barlow, sans-serif">Reabrir</button>
+      </article>
+    </sc-for>
+    <div style="font-size: 13px; color: #52627A; line-height: 1.4">Las realizadas se guardan 1 año. Lo eliminado pasa a la papelera y se borra definitivamente a los 30 días.</div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return { items: [
+      { title: 'Replanteo tabiquería planta 2', sub: 'Mallorca 245 · Hecha el 25 sep 2026 · se borra el 25 sep 2027' },
+      { title: 'Enviar planos de instalaciones al clima', sub: 'Nave Sabadell · Hecha el 22 sep 2026' },
+      { title: 'Reunión de arranque con la DF', sub: 'Diagonal 120 · Hecha el 18 sep 2026' },
+      { title: 'Pedir licencia de ocupación de vía', sub: 'Diagonal 120 · Hecha el 15 oct 2025 · se borra el 15 oct' }
+    ]};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Calendario · Semana</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 1440px; height: 900px; position: relative; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden; display: flex; flex-direction: column">
+  <header style="flex: none; background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 10px 24px; display: flex; align-items: center; gap: 16px">
+    <h1 style="margin: 0; width: 226px; font: 700 28px/1 'Barlow Condensed', 'Arial Narrow', sans-serif">Notas</h1>
+    <div style="display: flex; background: #F4F8FD; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+      <button style="min-height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 15px Barlow, sans-serif">Lista</button>
+      <button style="min-height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: #1F5FAE; color: #FFFFFF; font: 600 15px Barlow, sans-serif">Calendario</button>
+      <button style="min-height: 38px; padding: 0 16px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 15px Barlow, sans-serif">Matriz</button>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <button style="min-height: 44px; padding: 0 18px; border: 0; border-radius: 22px; background: #FF7B0F; color: #16324F; font: 700 17px 'Barlow Condensed', sans-serif">Dictar</button>
+    <button style="min-height: 44px; padding: 0 18px; border: 0; border-radius: 22px; background: #1F5FAE; color: #FFFFFF; font: 700 17px 'Barlow Condensed', sans-serif">+ Nueva nota</button>
+  </header>
+
+  <div style="flex-grow: 1; display: flex; min-height: 0">
+    <aside style="width: 266px; flex: none; background: #FFFFFF; border-right: 1px solid #D6E2F0; padding: 18px 16px; box-sizing: border-box; display: flex; flex-direction: column; gap: 20px">
+      <section style="display: flex; flex-direction: column; gap: 6px">
+        <label style="font: 600 13px/1 Barlow, sans-serif; letter-spacing: .6px; text-transform: uppercase; color: #52627A">Grupo filtrado</label>
+        <select style="min-height: 44px; border: 1px solid #9FB6D1; border-radius: 8px; padding: 0 10px; font: 600 15px Barlow, sans-serif; color: #16324F; background: #FFFFFF">
+          <option>Ninguno · ver todo</option>
+        </select>
+        <span style="font-size: 13px; color: #52627A">Por defecto el calendario muestra todas las notas con fecha.</span>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 8px">
+        <div style="font: 700 17px 'Barlow Condensed', sans-serif">Septiembre 2026</div>
+        <div style="display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; text-align: center; font-size: 12px">
+          <sc-for list="{{dow}}" as="d" hint-placeholder-count="7"><span style="color: #52627A; font-weight: 600; padding: 2px 0">{{d}}</span></sc-for>
+          <sc-for list="{{mini}}" as="m" hint-placeholder-count="35">
+            <span style="padding: 5px 0; border-radius: 4px; background: {{m.bg}}; color: {{m.ink}}; font-weight: {{m.w}}; outline: {{m.ring}}">{{m.n}}</span>
+          </sc-for>
+        </div>
+      </section>
+
+      <section style="display: flex; flex-direction: column; gap: 8px; font-size: 13px">
+        <div style="font: 600 13px/1 Barlow, sans-serif; letter-spacing: .6px; text-transform: uppercase; color: #52627A">Leyenda</div>
+        <div style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #C62828"></span>Crítica<span style="width: 10px; height: 10px; border-radius: 3px; background: #FF7B0F; margin-left: 8px"></span>Alta</div>
+        <div style="display: flex; align-items: center; gap: 8px"><span style="width: 10px; height: 10px; border-radius: 3px; background: #1F5FAE"></span>Normal<span style="width: 10px; height: 10px; border-radius: 3px; background: #52627A; margin-left: 8px"></span>Baja</div>
+        <div>🔔 Alarma con hora · ⚑ Fecha límite</div>
+        <div style="display: flex; align-items: center; gap: 4px">Carga del día:
+          <span style="width: 16px; height: 12px; border: 1px solid #D6E2F0; background: #FFFFFF"></span>
+          <span style="width: 16px; height: 12px; background: #EAF3FE"></span>
+          <span style="width: 16px; height: 12px; background: #CFE3FC"></span>
+          <span style="width: 16px; height: 12px; background: #9FC6F5"></span>
+        </div>
+        <label style="display: flex; align-items: center; gap: 8px; min-height: 36px"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #1F5FAE">Mostrar realizadas en gris</label>
+        <label style="display: flex; flex-direction: column; gap: 4px; padding-top: 6px">
+          <span style="font: 600 13px/1 Barlow, sans-serif; letter-spacing: .6px; text-transform: uppercase; color: #52627A">Horario visible</span>
+          <select style="min-height: 40px; border: 1px solid #D6E2F0; border-radius: 8px; padding: 0 8px; font: 600 14px Barlow, sans-serif; color: #16324F; background: #FFFFFF"><option>7:00 – 19:00</option></select>
+        </label>
+        <label style="display: flex; align-items: center; gap: 8px; min-height: 36px"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #1F5FAE">Mostrar fin de semana</label>
+      </section>
+    </aside>
+
+    <main style="flex-grow: 1; min-width: 0; padding: 16px 20px; display: flex; flex-direction: column; gap: 12px">
+      <div style="display: flex; align-items: center; gap: 10px">
+        <button aria-label="Semana anterior" style="width: 40px; height: 40px; border: 1px solid #D6E2F0; border-radius: 8px; background: #FFFFFF; color: #16324F; font-size: 18px">‹</button>
+        <button style="min-height: 40px; padding: 0 12px; border: 1px solid #D6E2F0; border-radius: 8px; background: #FFFFFF; color: #16324F; font: 600 14px Barlow, sans-serif">Hoy</button>
+        <button aria-label="Semana siguiente" style="width: 40px; height: 40px; border: 1px solid #D6E2F0; border-radius: 8px; background: #FFFFFF; color: #16324F; font-size: 18px">›</button>
+        <h2 style="margin: 0 0 0 6px; flex-grow: 1; font: 700 26px/1 'Barlow Condensed', sans-serif">28 sep – 4 oct 2026</h2>
+        <div style="display: flex; background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 3px">
+          <button style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; background: #EAF3FE; color: #1F5FAE; font: 600 14px Barlow, sans-serif">Semana</button>
+          <button style="min-height: 36px; padding: 0 14px; border: 0; border-radius: 8px; background: transparent; color: #52627A; font: 600 14px Barlow, sans-serif">Mes</button>
+        </div>
+      </div>
+
+      <div style="background: #FDECEC; border-radius: 10px; padding: 8px 12px; display: flex; align-items: center; gap: 10px; font-size: 14px">
+        <b style="color: #C62828">Atrasadas · 2</b>
+        <span style="padding: 3px 9px; border-radius: 6px; background: #FFFFFF">Solicitar licencia de grúa · venció 25 sep</span>
+        <span style="padding: 3px 9px; border-radius: 6px; background: #FFFFFF">Revisar bajantes · venció 26 sep</span>
+        <span style="flex-grow: 1"></span>
+        <span style="color: #52627A">Arrástralas a un hueco para replanificar</span>
+      </div>
+
+      <div style="flex-grow: 1; min-height: 0; background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column">
+        <div style="display: grid; grid-template-columns: 58px repeat(7, minmax(0, 1fr)); border-bottom: 1px solid #D6E2F0">
+          <span></span>
+          <sc-for list="{{days}}" as="d" hint-placeholder-count="7">
+            <div style="padding: 8px 8px 6px; border-left: 1px solid #E6EEF8; background: {{d.headBg}}; display: flex; flex-direction: column; gap: 2px">
+              <span style="font: 700 17px/1.1 'Barlow Condensed', sans-serif; color: {{d.ink}}">{{d.label}}</span>
+              <span style="font-size: 12px; color: #52627A">Libre: <b style="color: #16324F">{{d.free}}</b></span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display: grid; grid-template-columns: 58px repeat(7, minmax(0, 1fr)); border-bottom: 1px solid #D6E2F0; min-height: 58px">
+          <span style="font-size: 11px; font-weight: 600; color: #52627A; padding: 8px 6px; line-height: 1.2">⚑ Fecha límite</span>
+          <sc-for list="{{days}}" as="d" hint-placeholder-count="7">
+            <div style="border-left: 1px solid #E6EEF8; background: {{d.colBg}}; padding: 5px; display: flex; flex-direction: column; gap: 3px">
+              <sc-for list="{{d.due}}" as="u" hint-placeholder-count="1">
+                <span style="font-size: 12px; font-weight: 600; padding: 3px 6px; border-radius: 5px; background: {{u.bg}}; color: {{u.ink}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{u.t}}</span>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+        <div style="flex-grow: 1; display: grid; grid-template-columns: 58px repeat(7, minmax(0, 1fr)); overflow: hidden">
+          <div style="position: relative; height: 552px">
+            <sc-for list="{{hours}}" as="h" hint-placeholder-count="13">
+              <span style="position: absolute; right: 8px; top: {{h.top}}; font-size: 12px; color: #7D8DA3">{{h.l}}</span>
+            </sc-for>
+          </div>
+          <sc-for list="{{days}}" as="d" hint-placeholder-count="7">
+            <div style="position: relative; height: 552px; border-left: 1px solid #E6EEF8; background-color: {{d.colBg}}; background-image: repeating-linear-gradient(to bottom, #E6EEF8 0px, #E6EEF8 1px, transparent 1px, transparent 23px, #F2F6FB 23px, #F2F6FB 24px, transparent 24px, transparent 46px)">
+              <sc-for list="{{d.timed}}" as="e" hint-placeholder-count="1">
+                <div style="position: absolute; left: 4px; right: 4px; top: {{e.top}}; height: {{e.h}}; box-sizing: border-box; border-radius: 6px; background: {{e.bg}}; border-left: 3px solid {{e.dot}}; padding: 2px 6px; overflow: hidden; opacity: {{e.op}}; font-size: 12px; line-height: 1.25; box-shadow: {{e.shadow}}; outline: {{e.outline}}">
+                  <b style="color: {{e.ink}}">{{e.time}}</b> <span style="color: #16324F; font-weight: 600; text-decoration: {{e.deco}}">{{e.t}}</span> <span style="color: #52627A">· {{e.durL}}</span>
+                  <span style="position: absolute; left: 50%; bottom: 2px; width: 22px; height: 3px; margin-left: -11px; border-radius: 2px; background: {{e.dot}}; opacity: .55"></span>
+                </div>
+              </sc-for>
+              <sc-for list="{{d.drop}}" as="g" hint-placeholder-count="0">
+                <div style="position: absolute; left: 4px; right: 4px; top: {{g.top}}; height: {{g.h}}; box-sizing: border-box; border: 2px dashed #FF7B0F; border-radius: 6px; background: rgba(255,123,15,.08); font-size: 12px; font-weight: 600; color: #8A3D00; padding: 3px 6px">{{g.t}}</div>
+              </sc-for>
+              <div style="position: absolute; left: 0; right: 0; top: {{d.nowTop}}; height: 2px; background: #FF7B0F; opacity: {{d.nowOp}}"></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </main>
+  </div>
+  <div style="position: absolute; left: 50%; bottom: 22px; margin-left: -60px; transform: translateX(-50%); background: #16324F; color: #FFFFFF; border-radius: 10px; padding: 10px 16px; font-size: 14px; display: flex; gap: 16px; align-items: center; box-shadow: 0 8px 20px rgba(22,50,79,.25)">
+    <span>«Visita de la Propiedad» movida a jue 1 oct, 14:00</span>
+    <button style="min-height: 32px; padding: 0 10px; border: 1px solid #60A4F4; border-radius: 6px; background: transparent; color: #FFFFFF; font: 600 14px Barlow, sans-serif">Deshacer</button>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var PR = {
+      C: { dot: '#C62828', ink: '#C62828', bg: '#FDECEC' }, A: { dot: '#FF7B0F', ink: '#8A3D00', bg: '#FFF1E4' },
+      N: { dot: '#1F5FAE', ink: '#1F5FAE', bg: '#EAF3FE' }, B: { dot: '#52627A', ink: '#52627A', bg: '#F4F8FD' }
+    };
+    var HH = 46, START = 7, END = 19;
+    function ev(p, h, m, dur, t, o) {
+      o = o || {};
+      var s = h + m / 60;
+      var mins = Math.round(dur * 60);
+      var durL = mins < 60 ? mins + ' min' : (mins % 60 ? Math.floor(mins / 60) + ' h ' + (mins % 60) + ' min' : (mins / 60) + ' h');
+      return Object.assign({}, PR[p], { time: h + ':' + (m < 10 ? '0' + m : m), t: t, dur: dur, durL: durL,
+        top: ((s - START) * HH + 1) + 'px', h: Math.max(dur * HH - 2, 20) + 'px',
+        op: o.done ? '0.5' : (o.lifted ? '0.55' : '1'), deco: o.done ? 'line-through' : 'none',
+        shadow: o.lifted ? '0 6px 16px rgba(22,50,79,.25)' : 'none', outline: o.lifted ? '2px solid #FF7B0F' : 'none', counts: !o.done });
+    }
+    function du(p, t) { return { t: t, bg: PR[p].bg, ink: PR[p].ink }; }
+    function fmt(x) { var r = Math.round(x * 6) / 6; var hh = Math.floor(r), mm = Math.round((r - hh) * 60); return hh + ' h' + (mm ? ' ' + mm + ' min' : ''); }
+    function day(label, timed, due, opts) {
+      opts = opts || {};
+      var busy = timed.filter(function (e) { return e.counts; }).reduce(function (a, e) { return a + e.dur; }, 0);
+      return { label: label, timed: timed, due: due, free: fmt(END - START - busy), drop: opts.drop || [],
+        ink: opts.today ? '#1F5FAE' : '#16324F',
+        headBg: opts.today ? '#EAF3FE' : (opts.weekend ? '#F4F8FD' : '#FFFFFF'),
+        colBg: opts.today ? '#FAFCFF' : (opts.weekend ? '#F7F9FC' : '#FFFFFF'),
+        nowTop: ((10.25 - START) * HH) + 'px', nowOp: opts.today ? '1' : '0' };
+    }
+    var M10 = 1 / 6;
+    var days = [
+      day('Lun 28', [ev('N', 10, 0, M10, 'Enviar planos al clima', { done: true })], []),
+      day('Mar 29 · Hoy', [
+        ev('N', 9, 0, 1.5, 'Reunión de obra · Diagonal 120'),
+        ev('A', 12, 30, M10, 'Llamar al industrial de clima'),
+        ev('N', 17, 0, M10, 'Enviar acta a la DF')
+      ], [du('C', 'Revisar línea de vida')], { today: true }),
+      day('Mié 30', [ev('C', 7, 30, M10, 'Confirmar hormigonado P3')], [du('C', 'Hormigonado P3'), du('A', 'Certificación mensual')]),
+      day('Jue 1', [ev('A', 9, 0, M10, 'Pedir oferta de carpintería'), ev('N', 10, 0, 1, 'Revisar bajantes con el fontanero')], [],
+        { drop: [{ top: ((14 - START) * HH + 1) + 'px', h: (HH - 2) + 'px', t: 'Soltar aquí · jue 1 oct, 14:00' }] }),
+      day('Vie 2', [ev('N', 11, 0, 1, 'Visita de la Propiedad', { lifted: true })], [du('A', 'Oferta carpintería'), du('N', 'Muestras pavimento')]),
+      day('Sáb 3', [], [], { weekend: true }),
+      day('Dom 4', [], [], { weekend: true })
+    ];
+    var hours = [];
+    for (var h = START; h < END; h++) hours.push({ l: h + ':00', top: ((h - START) * HH + 2) + 'px' });
+    var LOAD = ['#FFFFFF', '#EAF3FE', '#CFE3FC', '#9FC6F5'];
+    var loads = { 1: 1, 3: 2, 7: 1, 8: 2, 10: 1, 14: 3, 15: 2, 17: 1, 21: 2, 22: 1, 24: 2, 25: 1, 28: 1, 29: 3, 30: 2 };
+    var mini = [];
+    for (var i = 0; i < 35; i++) {
+      var n = i; // Mon 31 Aug at index 0
+      var dnum = n === 0 ? 31 : (n <= 30 ? n : n - 30);
+      var inMonth = n >= 1 && n <= 30;
+      var lvl = inMonth ? (loads[n] || 0) : 0;
+      var inWeek = n >= 28 && n <= 34;
+      mini.push({ n: String(dnum), bg: LOAD[lvl], ink: inMonth ? '#16324F' : '#9FB6D1', w: n === 29 ? '700' : '400', ring: inWeek ? '1px solid #60A4F4' : 'none' });
+    }
+    return { days: days, hours: hours, mini: mini, dow: ['L', 'M', 'X', 'J', 'V', 'S', 'D'] };
+  }
+}
+</script>
+</body>
+</html>

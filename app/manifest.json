@@ -1,0 +1,21 @@
+{
+  "name": "Notas de obra",
+  "short_name": "Notas",
+  "description": "Notas, tareas y alarmas de obra, escritas o dictadas.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F4F8FD",
+  "theme_color": "#1F5FAE",
+  "lang": "es",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Dictar", "url": "./#/dictado", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Nueva nota", "url": "./#/nota/nueva", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

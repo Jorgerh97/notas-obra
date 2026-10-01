@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Resumen del día</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&amp;family=Barlow+Condensed:wght@600;700&amp;display=swap">
+<style>
+body{margin:0;font-family:Barlow,system-ui,sans-serif;color:#16324F;background:#F4F8FD}
+a{color:#1F5FAE}a:hover{color:#16324F}
+</style>
+</helmet>
+<div style="width: 390px; height: 960px; box-sizing: border-box; background: #F4F8FD; font-family: Barlow, system-ui, sans-serif; color: #16324F; overflow: hidden">
+  <header style="background: #FFFFFF; border-bottom: 3px solid #60A4F4; padding: 16px 16px 14px; display: flex; flex-direction: column; gap: 4px">
+    <div style="font-size: 14px; color: #52627A">Martes 29 de septiembre · 7:00</div>
+    <h1 style="margin: 0; font: 700 28px/1.1 'Barlow Condensed', sans-serif">Buenos días</h1>
+  </header>
+  <div style="padding: 14px 16px 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+    <div style="background: #FDECEC; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 2px"><span style="font: 700 28px/1 'Barlow Condensed', sans-serif; color: #C62828">2</span><span style="font-size: 13px; color: #16324F">Críticas</span></div>
+    <div style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 2px"><span style="font: 700 28px/1 'Barlow Condensed', sans-serif">3</span><span style="font-size: 13px; color: #16324F">Alarmas hoy</span></div>
+    <div style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 2px"><span style="font: 700 28px/1 'Barlow Condensed', sans-serif">2</span><span style="font-size: 13px; color: #16324F">Estancadas</span></div>
+  </div>
+  <main style="padding: 16px; display: flex; flex-direction: column; gap: 18px">
+    <sc-for list="{{sections}}" as="s" hint-placeholder-count="3">
+      <section style="display: flex; flex-direction: column; gap: 8px">
+        <h2 style="margin: 0; font: 700 20px/1 'Barlow Condensed', sans-serif">{{s.title}}</h2>
+        <div style="background: #FFFFFF; border: 1px solid #D6E2F0; border-radius: 12px; padding: 0 14px">
+          <sc-for list="{{s.items}}" as="i" hint-placeholder-count="2">
+            <div style="min-height: 52px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #EAF3FE; padding: 8px 0">
+              <span style="font: 700 15px 'Barlow Condensed', sans-serif; min-width: 44px; color: {{i.ink}}">{{i.left}}</span>
+              <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px">
+                <span style="font-size: 15px; font-weight: 600">{{i.title}}</span>
+                <span style="font-size: 13px; color: #52627A">{{i.sub}}</span>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+    </sc-for>
+    <button style="min-height: 52px; border: 0; border-radius: 10px; background: #1F5FAE; color: #FFFFFF; font: 700 18px 'Barlow Condensed', sans-serif">Ir al panel</button>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":390,"height":960}}'>
+class Component extends DCLogic {
+  renderVals() {
+    var red = '#C62828', ink = '#1F5FAE', grey = '#52627A';
+    return { sections: [
+      { title: 'Alarmas de hoy', items: [
+        { left: '9:00', ink: ink, title: 'Reunión de obra Diagonal 120', sub: 'Llevar PDF de pendientes' },
+        { left: '12:30', ink: ink, title: 'Llamar al industrial de clima', sub: 'Nave Sabadell' },
+        { left: '17:00', ink: ink, title: 'Enviar acta a la DF', sub: 'Mallorca 245' }
+      ]},
+      { title: 'Críticas', items: [
+        { left: 'Hoy', ink: red, title: 'Revisar línea de vida en cubierta', sub: 'Mallorca 245 · Jefe de obra' },
+        { left: 'Mié', ink: red, title: 'Confirmar hormigonado forjado P3', sub: 'Mallorca 245 · Encargado' }
+      ]},
+      { title: 'Sin tocar desde hace días', items: [
+        { left: '14 d', ink: grey, title: 'Revisar bajantes con el fontanero', sub: 'Diagonal 120' },
+        { left: '11 d', ink: grey, title: 'Solicitar licencia de grúa', sub: 'Nave Sabadell' }
+      ]}
+    ]};
+  }
+}
+</script>
+</body>
+</html>
