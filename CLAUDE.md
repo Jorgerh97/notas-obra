@@ -59,7 +59,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 
 ## Fases
 - **Fase 1**: hecha (este código).
-- **Fase 2**: calendario, matriz, arrastres, duración y resumen matutino → `docs/FASE2.md`.
+- **Fase 2**: hecha en la versión 1.2.0 (calendario, matriz, arrastres, duración y resumen matutino → `docs/FASE2.md`). Modo Lista/Calendario/Matriz en `S.ui.modo`; arrastres con Pointer Events en el objeto `SOLTAR` (tipos `prio` y `cal`); config compartida `cal_inicio`/`cal_fin` y `resumen_activo`/`resumen_hora`/`resumen_dias`; resumen enviado por `resumenMatutino()` en el cron.
 - **Fase 3** (no empezar sin que lo pida): notas recurrentes, fotos (R2), checklists, PDF para reuniones, conexión bidireccional con su app «Visitas de obra», nota → borrador de Gmail.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 

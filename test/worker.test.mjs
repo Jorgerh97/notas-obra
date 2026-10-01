@@ -115,6 +115,11 @@ ok(r.d.nota.estado === 'realizada', 'hecha desde el aviso');
 await new Promise(res => setTimeout(res, 300));
 ok(pushes.some(x => JSON.parse(ece.decrypt(x.body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString()).tipo === 'cerrar'), 'se envía cierre del aviso a otros dispositivos');
 
+// Ajustes compartidos: horario visible del calendario
+r = await call('PUT', '/config', { cal_inicio: '8', cal_fin: '20', otra_clave: 'x' });
+r = await call('GET', '/datos');
+ok(r.d.config.cal_inicio === '8' && r.d.config.cal_fin === '20' && !('otra_clave' in r.d.config), 'horario del calendario guardado en config');
+
 // Avisos: hora límite y antelación (hora de Madrid)
 const madrid = ms => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Madrid', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(ms)).map(x => [x.type, x.value])); return { fecha: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` }; };
 const lim = madrid(Date.now() + 3 * 864e5);   // dentro de 3 días, a esta hora
@@ -147,6 +152,37 @@ const nd = r.d.notas.find(n => n.id === 'nota_doble');
 ok(pushes.length === antesPush + 1 && nd.alarma_enviada === 0 && madrid(Date.parse(nd.alarma)).hora === limCerca.hora, 'tras el aviso previo queda programado el de la hora límite');
 const msgDoble = JSON.parse(ece.decrypt(pushes[pushes.length - 1].body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString());
 ok(msgDoble.cuerpo.startsWith('Fecha límite: ') && msgDoble.cuerpo.includes(limCerca.hora), 'el aviso dice la fecha y hora límite');
+
+// Resumen matutino: a la hora y en los días elegidos (hora de Madrid), una vez al día
+const descifrar = x => JSON.parse(ece.decrypt(x.body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString());
+const resumenes = () => pushes.map(descifrar).filter(m => m.tag === 'resumen');
+const hace = min => madrid(Date.now() - min * 60000).hora;
+await call('POST', '/notas', { id: 'nota_urgente', titulo: 'Revisar línea de vida', prioridad: 'critica' });
+await call('PUT', '/config', { resumen_activo: '1', resumen_hora: hace(1), resumen_dias: '1,2,3,4,5,6,7' });
+await d1.prepare("DELETE FROM config WHERE clave = 'resumen_ultimo'").run();
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+await new Promise(res => setTimeout(res, 300));
+const res1 = resumenes();
+ok(res1.length === 1 && res1[0].titulo === 'Buenos días' && /urgente/.test(res1[0].cuerpo) && res1[0].url === '#/resumen', 'resumen matutino enviado: ' + (res1[0] || {}).cuerpo);
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+await new Promise(res => setTimeout(res, 300));
+ok(resumenes().length === 1, 'el resumen se envía una sola vez al día');
+await d1.prepare("DELETE FROM config WHERE clave = 'resumen_ultimo'").run();
+const otroDia = String((new Date(madrid(Date.now()).fecha + 'T12:00:00Z').getUTCDay() + 6) % 7 + 1 === 1 ? 2 : 1);
+await call('PUT', '/config', { resumen_dias: otroDia });
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+await new Promise(res => setTimeout(res, 300));
+ok(resumenes().length === 1, 'no se envía en un día no elegido');
+await call('PUT', '/config', { resumen_dias: '1,2,3,4,5,6,7', resumen_hora: madrid(Date.now() + 30 * 60000).hora });
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+await new Promise(res => setTimeout(res, 300));
+ok(resumenes().length === 1, 'no se envía antes de la hora elegida');
+await call('PUT', '/config', { resumen_activo: '0', resumen_hora: hace(1) });
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+await new Promise(res => setTimeout(res, 300));
+ok(resumenes().length === 1, 'desactivado no se envía');
+r = await call('GET', '/datos');
+ok(r.d.config.resumen_activo === '0' && r.d.config.resumen_dias === '1,2,3,4,5,6,7', 'ajustes del resumen en config');
 
 // Retención: realizadas caducadas y obra abierta
 await call('POST', '/notas', { id: 'nota_vieja', titulo: 'Vieja sin obra', estado: 'realizada' });

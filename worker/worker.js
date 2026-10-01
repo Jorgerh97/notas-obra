@@ -45,7 +45,10 @@ const RETENCION_CAMBIOS = 90;       // días de historial de cambios
 const PRIORIDADES = ['critica', 'alta', 'normal', 'baja'];
 const ESTADOS = ['activa', 'realizada', 'papelera'];
 const TIPOS_ETIQUETA = ['obra', 'industrial', 'accion', 'responsable', 'otra'];
-const CONFIG_PUBLICA = ['revision_dia', 'revision_ultima'];
+// cal_*: horario visible del calendario. resumen_*: resumen matutino (activo '1'/'0', hora 'HH:MM', días '1,2,3,4,5' con 1 = lunes).
+const CONFIG_PUBLICA = ['revision_dia', 'revision_ultima', 'cal_inicio', 'cal_fin', 'resumen_activo', 'resumen_hora', 'resumen_dias'];
+const RESUMEN = { activo: '1', hora: '07:00', dias: '1,2,3,4,5', margen: 180 };   // margen: minutos tras la hora en que aún se envía
+const ESTANCADA_DIAS = 10;
 const USUARIO = 'yo';   // fase 1: un solo usuario. Preparado para varios.
 const AVISO_RANGO = { h: 12, d: 7, s: 4 };   // horas, días o semanas antes (desde 1)
 const HORA_AVISO = '08:00';                  // hora de los avisos cuando la fecha límite no tiene hora
@@ -718,9 +721,35 @@ async function borrarDefinitivo(env, ids) {
   }
 }
 
+// Resumen matutino: una vez al día, a la hora y en los días elegidos (hora de Madrid), un aviso con lo pendiente.
+// Si el worker no corre justo a esa hora, se envía en cuanto pueda dentro del margen. Sin nada pendiente, no se envía.
+async function resumenMatutino(env, ms = Date.now()) {
+  const cfg = async (k, def) => { const v = await getCfg(env, 'resumen_' + k); return v == null || v === '' ? def : v; };
+  if ((await cfg('activo', RESUMEN.activo)) === '0') return null;
+  const hora = await cfg('hora', RESUMEN.hora), dias = (await cfg('dias', RESUMEN.dias)).split(',').map(Number);
+  const p = partesMadrid(ms), dow = (new Date(p.fecha + 'T12:00:00Z').getUTCDay() + 6) % 7 + 1;
+  const desde = minutosHora(p.hora) - minutosHora(horaOk(hora) ? hora : RESUMEN.hora);
+  if (!dias.includes(dow) || desde < 0 || desde > RESUMEN.margen) return null;
+  if ((await getCfg(env, 'resumen_ultimo')) === p.fecha) return null;
+  await setCfg(env, 'resumen_ultimo', p.fecha);
+  const n = await first(env, `SELECT
+      SUM(prioridad = 'critica') AS urgentes,
+      SUM(fecha_limite = ? AND hora_limite IS NOT NULL) AS con_hora,
+      SUM(actualizada < ?) AS estancadas
+    FROM notas WHERE estado = 'activa' AND usuario_id = ?`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), USUARIO);
+  const partes = [[n.urgentes, 'urgente', 'urgentes'], [n.con_hora, 'con hora hoy', 'con hora hoy'], [n.estancadas, 'sin tocar', 'sin tocar']]
+    .filter(([k]) => k > 0).map(([k, uno, varios]) => k + ' ' + (k === 1 ? uno : varios));
+  if (!partes.length) return null;
+  const datos = { tipo: 'info', tag: 'resumen', titulo: 'Buenos días', cuerpo: partes.join(' · '), url: '#/resumen' };
+  await avisarTodos(env, datos);
+  return datos;
+}
+const minutosHora = h => Number(h.slice(0, 2)) * 60 + Number(h.slice(3, 5));
+
 async function programada(env) {
   await ensureSchema(env);
   await enviarAlarmas(env);
+  await resumenMatutino(env);
   const d = new Date();
   if (d.getUTCMinutes() % 15 === 0) await subirPrioridades(env);
   const hoy = d.toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });

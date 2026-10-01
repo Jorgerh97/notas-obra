@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,6 +20,11 @@ const AVISO_RANGO = { h: 12, d: 7, s: 4 };   // horas, días o semanas antes (de
 const AVISO_N = { h: ['hora', 'horas'], d: ['día', 'días'], s: ['semana', 'semanas'] };
 const HORA_AVISO = '08:00';                  // hora de los avisos cuando la fecha límite no tiene hora
 const CAMPOS_AVISO = ['fecha_limite', 'hora_limite', 'aviso_cant', 'aviso_unidad'];
+const MODOS = [['lista', 'Lista'], ['calendario', 'Calendario'], ['matriz', 'Matriz']];
+const DURACIONES = [[10, '10 min'], [30, '30 min'], [60, '1 h'], [120, '2 h']];
+const DURACION_DEF = 10;   // minutos; las notas sin duración ocupan esto en el calendario
+const chip = (act, v, on, txt) => `<button class="chip" data-act="${act}" data-v="${esc(v)}" aria-pressed="${on}">${txt}</button>`;
+const textoDuracion = m => m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
 
 const ICON = {
   mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
@@ -105,7 +110,7 @@ const S = {
   cfg: { url: '', token: '', dispositivo: '', pushEndpoint: '' },
   notas: [], etiquetas: [], personas: [], vistas: [], srv: {},
   outbox: [], conflictos: [], audios: [],
-  ui: { agrupar: 'fecha', vista: null, filtro: filtroVacio(), q: '', buscar: false, histTab: 'realizadas', histQ: '' },
+  ui: { modo: 'lista', grupoVista: '', matrizMas: {}, cal: { vista: 'semana', ref: '', realizadas: true, finde: true }, agrupar: 'fecha', vista: null, filtro: filtroVacio(), q: '', buscar: false, histTab: 'realizadas', histQ: '' },
   sync: { estado: 'local', msg: '' },
   flushing: false,
   ed: null, dic: null, rev: null, modal: null,
@@ -123,7 +128,7 @@ async function guardarLocal() {
 const guardarOutbox = () => idb.set('outbox', { outbox: S.outbox, conflictos: S.conflictos });
 const guardarCfg = () => idb.set('config', S.cfg);
 const guardarAudios = () => idb.set('audios', S.audios);
-const guardarUi = () => idb.set('ui', { agrupar: S.ui.agrupar, vista: S.ui.vista, filtro: S.ui.filtro });
+const guardarUi = () => idb.set('ui', { modo: S.ui.modo, grupoVista: S.ui.grupoVista, cal: { vista: S.ui.cal.vista, realizadas: S.ui.cal.realizadas, finde: S.ui.cal.finde }, agrupar: S.ui.agrupar, vista: S.ui.vista, filtro: S.ui.filtro });
 
 // ---------- Conexión con el worker ----------
 async function api(path, opt = {}) {
@@ -529,6 +534,7 @@ function renderBase() {
   base.innerHTML = `
   <header class="topbar">
     <div class="title"><h1>Notas</h1><span class="count">${total} activas${urgentes ? ' · ' + urgentes + (urgentes === 1 ? ' urgente' : ' urgentes') : ''}</span></div>
+    ${selectorModo('desk-only')}
     <label class="search desk-only">${ICON.search}<input id="q" type="search" placeholder="Buscar en notas, etiquetas o personas" value="${esc(S.ui.q)}" aria-label="Buscar"></label>
     <span class="spacer desk-only"></span>
     <span id="sync" class="status" title="${esc(S.sync.msg)}">${esc(textoSync())}</span>
@@ -539,20 +545,23 @@ function renderBase() {
   </header>
   ${S.ui.buscar ? `<div class="mob-only" style="padding:8px 16px 0"><label class="search">${ICON.search}<input id="qm" type="search" placeholder="Buscar" value="${esc(S.ui.q)}" aria-label="Buscar"><button class="icon-btn" data-act="cerrar-buscar" aria-label="Cerrar búsqueda" style="width:34px;height:34px">${ICON.close}</button></label></div>` : ''}
   <div class="layout">
-    <nav class="sidebar" aria-label="Grupos filtrados">
+    <nav class="sidebar" aria-label="${S.ui.modo === 'calendario' ? 'Opciones del calendario' : 'Grupos filtrados'}">
+      ${S.ui.modo === 'calendario' ? `<div class="side-groups">${calLateral()}</div>` : `
       ${sideItem(sidebarItems[0], cur)}
       <div class="side-head"><span>Grupos filtrados</span><button class="btn small" data-act="guardar-grupo" title="Guardar los filtros actuales como grupo" ${filtroActivo(S.ui.filtro) ? '' : 'disabled'}>+ Guardar</button></div>
       <div class="side-groups">
         ${sidebarItems.slice(1).map(it => sideItem(it, cur)).join('') || '<p class="hint" style="padding:4px 12px">Aplica filtros y guárdalos como grupo para volver a ellos con un clic.</p>'}
-      </div>
+      </div>`}
       <div class="side-foot">
+        <a class="side-item" href="#/resumen"><span class="grow"><b>Resumen del día</b></span></a>
         <a class="side-item" href="#/revision"><span class="grow"><b>Revisión semanal</b></span></a>
         <a class="side-item" href="#/historial"><span class="grow"><b>Historial y papelera</b></span></a>
         <a class="side-item" href="#/ajustes"><span class="grow"><b>Ajustes</b></span></a>
       </div>
     </nav>
-    <main class="main">
+    <main class="main modo-${S.ui.modo}">
       ${banners.join('')}
+      ${S.ui.modo !== 'lista' ? (S.ui.modo === 'matriz' ? vistaMatriz() : vistaCalendario()) : `
       <div class="groups-row">
         <div class="label">Grupos filtrados</div>
         <div class="chips">
@@ -569,6 +578,7 @@ function renderBase() {
         <button class="btn small" data-act="imprimir-lista">PDF de la lista</button>
       </div>
       <div class="toolbar">
+        ${selectorModo('mob-only')}
         <span class="hint">Agrupar</span>
         <div class="seg"><button data-act="agrupar" data-v="fecha" aria-pressed="${S.ui.agrupar === 'fecha'}">Fecha</button><button data-act="agrupar" data-v="etiqueta" aria-pressed="${S.ui.agrupar === 'etiqueta'}">Etiqueta</button></div>
         <span class="grow"></span>
@@ -578,7 +588,7 @@ function renderBase() {
       <div class="list">
         ${grupos.map(g => `<section class="group ${g.key}"><h2>${esc(g.nombre)} <small>${g.notas.length}</small></h2><div class="rows">${g.notas.map(filaNota).join('')}</div></section>`).join('')}
         ${!lista.length ? vacio(total) : ''}
-      </div>
+      </div>`}
     </main>
   </div>
   <div class="bottombar">
@@ -586,6 +596,443 @@ function renderBase() {
     <a class="btn pill primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a>
   </div>`;
   medirTopbar();
+}
+// Selector «Lista · Calendario · Matriz»: en ordenador va en la barra superior y en el móvil en la barra fija.
+function selectorModo(clase) {
+  return `<div class="seg modos ${clase}" role="group" aria-label="Modo de vista">${MODOS.map(([v, t]) => `<button data-act="modo" data-v="${v}" aria-pressed="${S.ui.modo === v}">${t}</button>`).join('')}</div>`;
+}
+// Selector de grupo filtrado de la Matriz y el Calendario (independiente del filtro de la Lista).
+function selectorGrupo(clase) {
+  const cur = S.ui.grupoVista || '';
+  return `<label class="sel-grupo ${clase}">${clase === 'desk-only' ? '<span>Grupo filtrado</span>' : ''}<select class="input" data-grupo-vista aria-label="Grupo filtrado">
+    <option value="">${clase === 'mob-only' ? 'Grupo filtrado: ninguno · ver todo' : 'Ninguno · ver todo'}</option>
+    ${S.vistas.map(v => `<option value="${esc(v.id)}" ${cur === v.id ? 'selected' : ''}>${esc(v.nombre)}</option>`).join('')}</select></label>`;
+}
+// Notas activas del grupo elegido (y de la búsqueda), para la Matriz y el Calendario.
+function notasDeGrupo(conRealizadas) {
+  const v = S.ui.grupoVista && S.vistas.find(x => x.id === S.ui.grupoVista);
+  const f = v ? { ...filtroVacio(), ...v.filtro } : null;
+  return S.notas.filter(n => (n.estado === 'activa' || (conRealizadas && n.estado === 'realizada'))
+    && (!f || cumpleFiltro(n, f)) && cumpleBusqueda(n, S.ui.q));
+}
+// Fecha corta de una nota: «hoy 12:30», «⚑ vie 2 oct», «venció 25 sep» o «sin fecha».
+function cuandoCorto(n) {
+  if (!n.fecha_limite) return { t: 'sin fecha', late: false };
+  const h = hoyYmd(), hl = n.hora_limite ? ' ' + n.hora_limite : '';
+  const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
+  if (late) return { t: 'venció ' + (n.fecha_limite === h ? 'hoy' : diaCorto(n.fecha_limite)) + hl, late };
+  return { t: (n.hora_limite ? '' : '⚑ ') + relDia(n.fecha_limite) + hl + (textoAviso(n) ? ' 🔔' : ''), late };
+}
+const ordenFecha = (a, b) => String(a.fecha_limite || '9999').localeCompare(String(b.fecha_limite || '9999'))
+  || String(a.hora_limite || '99:99').localeCompare(String(b.hora_limite || '99:99'))
+  || String(a.creada).localeCompare(String(b.creada));
+
+// ---------- Matriz de prioridad ----------
+const MATRIZ_MOVIL = 5;   // notas visibles por bloque en el móvil antes de «Ver X más»
+function vistaMatriz() {
+  const notas = notasDeGrupo().sort(ordenFecha);
+  const v = S.ui.grupoVista && S.vistas.find(x => x.id === S.ui.grupoVista);
+  const bloques = PRIOS.map(p => {
+    const lista = notas.filter(n => n.prioridad === p);
+    const abierto = S.ui.matrizMas && S.ui.matrizMas[p];
+    const visibles = abierto ? lista : lista.slice(0, MATRIZ_MOVIL);
+    const fila = n => {
+      const c = cuandoCorto(n), tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
+      return `<div class="mx-row" data-id="${esc(n.id)}" data-drag="prio" data-titulo="${esc(n.titulo)}" data-cuando="${esc(c.t)}">
+        <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
+        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${n.cuerpo ? `<span class="mx-body"> — ${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
+        <span class="mx-tags desk-only">${tags}</span>
+        <span class="mx-when ${c.late ? 'late' : ''}">${esc(c.t)}</span>
+      </div>`;
+    };
+    return `<section class="mx-q p-${p}" data-drop="prio" data-prio="${p}">
+      <div class="mx-head"><span class="mx-dot"></span><h3>${PRIO_N[p]}</h3><span class="n">${lista.length}</span><span class="grow"></span><span class="mx-hint"></span></div>
+      <div class="mx-rows">
+        <div class="desk-only">${lista.map(fila).join('') || '<p class="hint mx-vacio">Sin notas</p>'}</div>
+        <div class="mob-only">${visibles.map(fila).join('') || '<p class="hint mx-vacio">Sin notas</p>'}
+          ${lista.length > MATRIZ_MOVIL ? `<button class="mx-mas" data-act="mx-mas" data-v="${p}">${abierto ? 'Ver menos' : 'Ver ' + (lista.length - MATRIZ_MOVIL) + ' más'}</button>` : ''}</div>
+      </div>
+    </section>`;
+  }).join('');
+  return `<div class="toolbar">${selectorModo('mob-only')}${selectorGrupo('mob-only')}</div>
+    <div class="main-head desk-only"><h2>Matriz de prioridad</h2><span class="hint">${notas.length} ${notas.length === 1 ? 'nota activa' : 'notas activas'} · ordenadas por fecha dentro de cada bloque</span><span class="grow"></span>${selectorGrupo('desk-only')}</div>
+    ${v ? `<div class="banner"><span class="grow">Mostrando solo: <b>${esc(v.nombre)}</b>.</span><button class="btn small" data-act="quitar-grupo-vista">Quitar grupo</button></div>` : ''}
+    <div class="matriz">${bloques}</div>`;
+}
+function cambiarPrioridad(id, prio) {
+  const n = nota(id);
+  if (!n || n.prioridad === prio) return;
+  const antes = { prioridad: n.prioridad, subir_critica: n.subir_critica };
+  // Si se baja a mano una urgente, no se vuelve a subir sola por la fecha límite.
+  const cambios = { prioridad: prio };
+  if (antes.prioridad === 'critica' && n.subir_critica !== 0) cambios.subir_critica = 0;
+  editarNotaLocal(id, cambios);
+  renderBase();
+  toast(`«${n.titulo}» pasa de ${PRIO_N[antes.prioridad]} a ${PRIO_N[prio]}`, {
+    deshacer: () => { editarNotaLocal(id, 'subir_critica' in cambios ? antes : { prioridad: antes.prioridad }); renderBase(); },
+  });
+}
+
+// ---------- Calendario ----------
+const CAL_HH = 46;   // píxeles por hora en la vista Semana
+const HORARIOS = [[6, 18], [7, 19], [7, 20], [8, 18], [8, 20], [6, 22]];
+const DIAS_CORTOS = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
+const DIAS_LARGOS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+const pad2 = n => String(n).padStart(2, '0');
+const mayus = s => s.charAt(0).toUpperCase() + s.slice(1);
+// Horario visible (ajuste compartido entre dispositivos): 7:00–19:00 por defecto.
+const calHorario = () => { const i = Number(S.srv.cal_inicio), f = Number(S.srv.cal_fin); return S.srv.cal_inicio != null && i >= 0 && f > i && f <= 24 ? [i, f] : [7, 19]; };
+const lunesDe = f => { const [y, m, d] = f.split('-').map(Number); return addDias(f, -((new Date(y, m - 1, d).getDay() + 6) % 7)); };
+const minutosDe = h => { const [a, b] = h.split(':').map(Number); return a * 60 + b; };
+const durNota = n => n.duracion || DURACION_DEF;
+const fmtLibre = m => m <= 0 ? '0 min' : textoDuracion(m);
+const tituloMes = f => { const [y, m] = f.split('-').map(Number); return mayus(new Date(y, m - 1, 1).toLocaleDateString('es-ES', { month: 'long', year: 'numeric' }).replace(' de ', ' ')); };
+function cal() { if (!S.ui.cal.ref) S.ui.cal.ref = hoyYmd(); return S.ui.cal; }
+// Notas del calendario: activas con fecha (y realizadas, si se muestran) del grupo elegido.
+const notasCal = () => notasDeGrupo(cal().realizadas).filter(n => n.fecha_limite);
+// Nivel de carga de un día (0-3) según sus notas activas.
+const cargaDia = (notas, f) => Math.min(3, notas.filter(n => n.fecha_limite === f && n.estado === 'activa').length);
+
+function vistaCalendario() {
+  const c = cal(), notas = notasCal();
+  const v = S.ui.grupoVista && S.vistas.find(x => x.id === S.ui.grupoVista);
+  const lun = lunesDe(c.ref);
+  const titulo = c.vista === 'mes' ? tituloMes(c.ref)
+    : (() => { const dom = addDias(lun, 6), a = new Date(lun + 'T12:00'), b = new Date(dom + 'T12:00');
+      const f = (d, o) => d.toLocaleDateString('es-ES', o).replace(/\./g, '');
+      return a.getMonth() === b.getMonth() ? `${a.getDate()} – ${f(b, { day: 'numeric', month: 'short', year: 'numeric' })}` : `${f(a, { day: 'numeric', month: 'short' })} – ${f(b, { day: 'numeric', month: 'short', year: 'numeric' })}`; })();
+  // Atrasadas: de días anteriores (las de hoy ya se ven en su día).
+  const atrasadas = notas.filter(n => n.estado === 'activa' && n.fecha_limite < hoyYmd()).sort(ordenFecha);
+  return `<div class="toolbar">${selectorModo('mob-only')}
+      <div class="calm-opciones mob-only"><div class="seg"><button data-act="cal-vista" data-v="semana" aria-pressed="${c.vista !== 'mes'}">Agenda</button><button data-act="cal-vista" data-v="mes" aria-pressed="${c.vista === 'mes'}">Mes</button></div>${selectorGrupo('mob-only')}</div></div>
+    <div class="calm mob-only">${calMovil(notas, atrasadas, v)}</div>
+    <div class="cal desk-only">
+      <div class="cal-head">
+        <button class="btn icon-sq" data-act="cal-mover" data-v="-1" aria-label="${c.vista === 'mes' ? 'Mes' : 'Semana'} anterior">‹</button>
+        <button class="btn" data-act="cal-hoy">Hoy</button>
+        <button class="btn icon-sq" data-act="cal-mover" data-v="1" aria-label="${c.vista === 'mes' ? 'Mes' : 'Semana'} siguiente">›</button>
+        <h2>${esc(titulo)}</h2>
+        <div class="seg"><button data-act="cal-vista" data-v="semana" aria-pressed="${c.vista !== 'mes'}">Semana</button><button data-act="cal-vista" data-v="mes" aria-pressed="${c.vista === 'mes'}">Mes</button></div>
+      </div>
+      ${v ? `<div class="banner"><span class="grow"><b>Mostrando solo: ${esc(v.nombre)}</b> · Los días vacíos pueden tener notas de otros grupos.</span><button class="btn small" data-act="quitar-grupo-vista">Quitar grupo · ver todo</button></div>` : ''}
+      ${atrasadas.length ? `<div class="cal-atrasadas"><b>Atrasadas · ${atrasadas.length}</b>
+        <div class="chips">${atrasadas.map(n => `<button class="chip" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}>${esc(n.titulo)} · ${esc(cuandoCorto(n).t)}</button>`).join('')}</div>
+        <span class="hint">Arrástralas a un hueco para replanificar</span></div>` : ''}
+      ${c.vista === 'mes' ? calMes(notas) : calSemana(notas)}
+    </div>`;
+}
+
+// Reparte en columnas las notas que se solapan en el mismo día.
+function enColumnas(evs) {
+  const out = []; let grupo = [], finGrupo = -1;
+  const cerrar = () => {
+    const cols = [];
+    for (const ev of grupo) { let k = cols.findIndex(fin => fin <= ev.s); if (k < 0) { k = cols.length; cols.push(0); } cols[k] = ev.e; ev.col = k; }
+    for (const ev of grupo) ev.ncol = cols.length;
+    out.push(...grupo); grupo = [];
+  };
+  for (const ev of evs.sort((a, b) => a.s - b.s || b.e - a.e)) { if (grupo.length && ev.s >= finGrupo) cerrar(); grupo.push(ev); finGrupo = Math.max(finGrupo, ev.e); }
+  if (grupo.length) cerrar();
+  return out;
+}
+
+function calSemana(notas) {
+  const c = cal(), [ini, fin] = calHorario(), lun = lunesDe(c.ref), hoy = hoyYmd();
+  const dias = Array.from({ length: c.finde ? 7 : 5 }, (_, i) => addDias(lun, i));
+  const alto = (fin - ini) * CAL_HH, vis0 = ini * 60, vis1 = fin * 60;
+  const ahora = new Date(), minAhora = ahora.getHours() * 60 + ahora.getMinutes();
+  const cols = `58px repeat(${dias.length}, minmax(0, 1fr))`;
+  const datos = dias.map((f, i) => {
+    const delDia = notas.filter(n => n.fecha_limite === f);
+    const conHora = delDia.filter(n => n.hora_limite);
+    // Libre = horario visible − lo que ocupan las notas activas con hora (las realizadas no cuentan).
+    const ocupado = conHora.filter(n => n.estado === 'activa').reduce((a, n) => { const s = minutosDe(n.hora_limite); return a + Math.max(0, Math.min(s + durNota(n), vis1) - Math.max(s, vis0)); }, 0);
+    return { f, finde: i >= 5, hoy: f === hoy, delDia, conHora, libre: (fin - ini) * 60 - ocupado };
+  });
+  const cabecera = datos.map(d => { const x = new Date(d.f + 'T12:00');
+    return `<div class="cal-dh ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}"><b>${DIAS_LARGOS[(x.getDay() + 6) % 7].slice(0, 3)} ${x.getDate()}${d.hoy ? ' · Hoy' : ''}</b><span>Libre: <b>${fmtLibre(d.libre)}</b></span></div>`; }).join('');
+  const limites = datos.map(d => `<div class="cal-due ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" data-sinhora="1">
+    ${d.delDia.filter(n => !n.hora_limite).sort((a, b) => rankPrio(a.prioridad) - rankPrio(b.prioridad)).map(n => `<button class="cal-chip p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)} title="${esc(n.titulo)}">${esc(n.titulo)}</button>`).join('')}</div>`).join('');
+  const horas = Array.from({ length: fin - ini }, (_, i) => `<span style="top:${i * CAL_HH + 2}px">${ini + i}:00</span>`).join('');
+  const columnas = datos.map(d => {
+    // Las notas fuera del horario visible se pegan al borde; se reparten en columnas según donde se dibujan.
+    const evs = enColumnas(d.conHora.map(n => { const r = minutosDe(n.hora_limite), s = Math.min(Math.max(r, vis0), vis1 - 26); return { n, r, s, e: s + Math.max(durNota(n), 26) }; }));
+    const bloques = evs.map(({ n, r, s, col, ncol }) => {
+      const dur = durNota(n);
+      const top = (s - vis0) / 60 * CAL_HH;
+      const h = Math.max(Math.min(dur / 60 * CAL_HH - 2, alto - top), 20);
+      const fuera = r < vis0 ? '↑ ' : r >= vis1 ? '↓ ' : '';
+      return `<button class="cal-ev p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}
+        style="top:${top + 1}px;height:${h}px;left:calc(${col / ncol * 100}% + 4px);width:calc(${100 / ncol}% - 8px)" title="${esc(n.hora_limite + ' ' + n.titulo + ' · ' + textoDuracion(dur))}">
+        <b>${fuera}${esc(n.hora_limite)}</b> <span class="t">${esc(n.titulo)}</span> <span class="d">· ${textoDuracion(dur)}${textoAviso(n) ? ' 🔔' : ''}</span>${n.estado === 'activa' ? '<span class="cal-asa" data-estirar aria-hidden="true"></span>' : ''}</button>`;
+    }).join('');
+    const linea = d.hoy && minAhora >= vis0 && minAhora < vis1 ? `<div class="cal-ahora" style="top:${(minAhora - vis0) / 60 * CAL_HH}px"></div>` : '';
+    return `<div class="cal-col ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" style="height:${alto}px">${bloques}${linea}</div>`;
+  }).join('');
+  return `<div class="cal-semana">
+    <div class="cal-fila" style="grid-template-columns:${cols}"><span></span>${cabecera}</div>
+    <div class="cal-fila cal-fila-due" style="grid-template-columns:${cols}"><span class="cal-due-lbl">⚑ Fecha límite</span>${limites}</div>
+    <div class="cal-scroll"><div class="cal-fila cal-rejilla" style="grid-template-columns:${cols};--hh:${CAL_HH}px"><div class="cal-horas" style="height:${alto}px">${horas}</div>${columnas}</div></div>
+  </div>`;
+}
+
+function calMes(notas) {
+  const c = cal(), [y, m] = c.ref.split('-').map(Number), hoy = hoyYmd();
+  const ini = lunesDe(`${y}-${pad2(m)}-01`), ultimo = ymd(new Date(y, m, 0));
+  const semanas = Math.ceil((Math.round((Date.parse(ultimo) - Date.parse(ini)) / DIA) + 1) / 7);
+  const celdas = Array.from({ length: semanas * 7 }, (_, i) => {
+    const f = addDias(ini, i), [, mm, dd] = f.split('-').map(Number);
+    const lista = notas.filter(n => n.fecha_limite === f)
+      .sort((a, b) => (a.hora_limite ? 0 : 1) - (b.hora_limite ? 0 : 1) || String(a.hora_limite).localeCompare(String(b.hora_limite)) || rankPrio(a.prioridad) - rankPrio(b.prioridad));
+    return `<div class="cal-dia carga${cargaDia(notas, f)} ${mm !== m ? 'fuera' : ''} ${f === hoy ? 'hoy' : ''}" data-drop="cal" data-fecha="${f}" data-act="cal-dia" data-v="${f}">
+      <span class="num">${dd}</span>
+      ${lista.slice(0, 2).map(n => `<button class="cal-mi p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}><i class="dot"></i>${n.hora_limite ? esc(n.hora_limite) + ' ' : ''}${esc(n.titulo)}</button>`).join('')}
+      ${lista.length > 2 ? `<button class="cal-mas" data-act="cal-dia" data-v="${f}">+${lista.length - 2} más</button>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="cal-mes"><div class="cal-mes-dow">${DIAS_LARGOS.map(d => `<span>${d}</span>`).join('')}</div>
+    <div class="cal-mes-rejilla" style="grid-template-rows:repeat(${semanas}, minmax(0, 1fr))">${celdas}</div></div>`;
+}
+
+// Atributos para poder arrastrar una nota del calendario (solo las pendientes).
+const arrastrable = n => n.estado === 'activa' ? `data-drag="cal" data-titulo="${esc(n.titulo)}" data-cuando="${esc(cuandoCorto(n).t)}"` : '';
+// Mover una nota a otro día u hora (arrastrando), con Deshacer. El aviso previo se recalcula solo.
+function moverNota(id, cambios, donde) {
+  const n = nota(id); if (!n) return;
+  const antes = { fecha_limite: n.fecha_limite, hora_limite: n.hora_limite || null };
+  editarNotaLocal(id, cambios);
+  renderBase();
+  toast(`«${n.titulo}» movida a ${donde}`, { deshacer: () => { editarNotaLocal(id, antes); renderBase(); } });
+}
+function cambiarDuracion(id, dur) {
+  const n = nota(id); if (!n) return;
+  const antes = n.duracion || null;
+  editarNotaLocal(id, { duracion: dur });
+  renderBase();
+  toast(`«${n.titulo}» dura ahora ${textoDuracion(dur)}`, { deshacer: () => { editarNotaLocal(id, { duracion: antes }); renderBase(); } });
+}
+
+// ---------- Calendario en el móvil: Agenda y Mes ----------
+const sinMes = f => diaCorto(f).replace(',', '').replace(/ \S+$/, '');   // «jue 1»
+const sinDia = f => diaCorto(f).replace(/^\S+ /, '');                    // «1 oct»
+// En el móvil no se arrastra: la fecha se cambia desde el editor.
+function calMovil(notas, atrasadas, grupo) {
+  const c = cal(), hoy = hoyYmd(), lun = lunesDe(c.ref);
+  const aviso = grupo ? `<div class="banner"><span class="grow">Mostrando solo: <b>${esc(grupo.nombre)}</b>.</span><button class="btn small" data-act="quitar-grupo-vista">Quitar</button></div>` : '';
+  if (c.vista === 'mes') {
+    const [y, m] = c.ref.split('-').map(Number), ini = lunesDe(`${y}-${pad2(m)}-01`), ultimo = ymd(new Date(y, m, 0));
+    const semanas = Math.ceil((Math.round((Date.parse(ultimo) - Date.parse(ini)) / DIA) + 1) / 7);
+    const celdas = Array.from({ length: semanas * 7 }, (_, i) => {
+      const f = addDias(ini, i), [, mm, dd] = f.split('-').map(Number);
+      const lista = notas.filter(n => n.fecha_limite === f && n.estado === 'activa').sort((a, b) => rankPrio(a.prioridad) - rankPrio(b.prioridad));
+      return `<button class="calm-dia carga${cargaDia(notas, f)} ${mm !== m ? 'fuera' : ''} ${f === hoy ? 'hoy' : ''}" data-act="cal-dia" data-v="${f}" aria-label="${esc(diaLargo(f))}: ${lista.length} notas">
+        <span class="num">${dd}</span><span class="puntos">${lista.slice(0, 3).map(n => `<i class="dot p-${n.prioridad}"></i>`).join('')}</span></button>`;
+    }).join('');
+    return `<div class="calm-nav"><button class="btn icon-sq" data-act="cal-mover" data-v="-1" aria-label="Mes anterior">‹</button><h2>${esc(tituloMes(c.ref))}</h2><button class="btn small" data-act="cal-hoy">Hoy</button><button class="btn icon-sq" data-act="cal-mover" data-v="1" aria-label="Mes siguiente">›</button></div>
+      ${aviso}<div class="calm-mes">${DIAS_CORTOS.map(d => `<span>${d}</span>`).join('')}${celdas}</div>
+      <p class="hint">Toca un día para ver su agenda.</p>`;
+  }
+  // Agenda: tira de 7 días (se desliza para cambiar de semana) y la lista por días.
+  const dias = Array.from({ length: 7 }, (_, i) => addDias(lun, i));
+  const tira = dias.map((f, i) => {
+    const k = notas.filter(n => n.fecha_limite === f && n.estado === 'activa').length;
+    return `<button class="calm-tira-dia carga${cargaDia(notas, f)} ${f === hoy ? 'hoy' : ''}" data-act="calm-ir" data-v="${f}"><span>${DIAS_CORTOS[i]}</span><b>${Number(f.slice(8))}</b><small>${k || '—'}</small></button>`;
+  }).join('');
+  const etiquetaDia = f => f === hoy ? 'Hoy · ' + sinMes(f) : f === addDias(hoy, 1) ? 'Mañana · ' + sinMes(f) : mayus(diaCorto(f).replace(',', ''));
+  // En la semana actual, los días ya pasados no se listan (lo pendiente está en Atrasadas).
+  const visibles = dias.filter(f => f >= hoy || lun > hoy || addDias(lun, 6) < hoy);
+  const bloques = []; let vacios = [];
+  const cerrarVacios = () => {
+    if (!vacios.length) return;
+    const a = vacios[0], b = vacios[vacios.length - 1];
+    bloques.push(`<section class="calm-dia-sec"><div class="calm-vacio">${esc(mayus(sinMes(a)))}${a !== b ? ' – ' + esc(mayus(sinMes(b))) : ''} · Sin notas · hueco disponible</div></section>`);
+    vacios = [];
+  };
+  for (const f of visibles) {
+    const lista = notas.filter(n => n.fecha_limite === f)
+      .sort((a, b) => (a.estado === 'activa' ? 0 : 1) - (b.estado === 'activa' ? 0 : 1) || (a.hora_limite ? 0 : 1) - (b.hora_limite ? 0 : 1) || String(a.hora_limite).localeCompare(String(b.hora_limite)) || rankPrio(a.prioridad) - rankPrio(b.prioridad));
+    if (!lista.length) { vacios.push(f); continue; }
+    cerrarVacios();
+    const pend = lista.filter(n => n.estado === 'activa').length;
+    bloques.push(`<section class="calm-dia-sec" id="calm-${f}"><div class="calm-dia-t ${f === hoy ? 'hoy' : ''}"><h2>${esc(etiquetaDia(f))}</h2><span>${pend === 1 ? '1 nota' : pend + ' notas'}</span></div>
+      ${lista.map(n => { const e = (n.etiquetas || []).map(etq).filter(Boolean)[0];
+        return `<button class="calm-item p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}">
+          <span class="calm-cuando">${n.hora_limite ? esc(n.hora_limite) + (textoAviso(n) ? ' 🔔' : '') : '⚑ Límite'}</span>
+          <span class="calm-txt"><b>${esc(n.titulo)}</b><small><i class="dot"></i>${PRIO_N[n.prioridad]}${n.hora_limite ? ' · ' + textoDuracion(durNota(n)) : ''}${e ? ' · #' + esc(e.nombre) : ''}</small></span></button>`; }).join('')}</section>`);
+  }
+  cerrarVacios();
+  const dom = addDias(lun, 6);
+  return `<div class="calm-nav"><button class="btn icon-sq" data-act="cal-mover" data-v="-1" aria-label="Semana anterior">‹</button><h2>${esc(sinDia(lun))} – ${esc(sinDia(dom))}</h2><button class="btn small" data-act="cal-hoy">Hoy</button><button class="btn icon-sq" data-act="cal-mover" data-v="1" aria-label="Semana siguiente">›</button></div>
+    <div class="calm-tira" data-deslizar="semana">${tira}</div>
+    ${aviso}
+    ${atrasadas.length ? `<div class="calm-atrasadas"><b>Atrasadas · ${atrasadas.length}</b><div>${atrasadas.map(n => `<button data-act="abrir" data-id="${esc(n.id)}">${esc(n.titulo)} (${esc(sinDia(n.fecha_limite))})</button>`).join(' · ')}</div></div>` : ''}
+    ${bloques.join('') || '<p class="hint">No hay días por delante en esta semana.</p>'}`;
+}
+// Deslizar la tira de días a izquierda o derecha cambia de semana.
+let deslizar = null;
+document.addEventListener('touchstart', ev => { const t = ev.target.closest('[data-deslizar]'); deslizar = t ? { x: ev.touches[0].clientX, y: ev.touches[0].clientY } : null; }, { passive: true });
+document.addEventListener('touchend', ev => {
+  if (!deslizar) return;
+  const dx = ev.changedTouches[0].clientX - deslizar.x, dy = ev.changedTouches[0].clientY - deslizar.y;
+  deslizar = null;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { cal().ref = addDias(cal().ref, dx < 0 ? 7 : -7); renderBase(); }
+}, { passive: true });
+
+// Panel lateral del calendario (ordenador): grupo, mes pequeño, leyenda y opciones.
+function calLateral() {
+  const c = cal(), notas = notasCal(), [ini, fin] = calHorario(), hoy = hoyYmd();
+  const [y, m] = c.ref.split('-').map(Number), primero = lunesDe(`${y}-${pad2(m)}-01`), lun = lunesDe(c.ref);
+  const mini = Array.from({ length: 42 }, (_, i) => {
+    const f = addDias(primero, i), [, mm, dd] = f.split('-').map(Number);
+    if (i >= 35 && mm !== m) return '';
+    const semana = c.vista !== 'mes' && f >= lun && f <= addDias(lun, 6);
+    return `<button class="carga${cargaDia(notas, f)} ${mm !== m ? 'fuera' : ''} ${f === hoy ? 'hoy' : ''} ${semana ? 'semana' : ''}" data-act="cal-dia" data-v="${f}" aria-label="${esc(diaLargo(f))}">${dd}</button>`;
+  }).join('');
+  return `<div class="cal-side">
+    <section><div class="cal-lbl">Grupo filtrado</div>${selectorGrupo('cal-sel')}<small class="hint">Por defecto el calendario muestra todas las notas con fecha.</small></section>
+    <section><div class="cal-mini-t">${esc(tituloMes(c.ref))}</div><div class="cal-mini">${DIAS_CORTOS.map(d => `<span>${d}</span>`).join('')}${mini}</div></section>
+    <section class="cal-leyenda"><div class="cal-lbl">Leyenda</div>
+      <div><i class="dot p-critica"></i>Urgente <i class="dot p-alta"></i>Alta</div>
+      <div><i class="dot p-normal"></i>Normal <i class="dot p-baja"></i>Baja</div>
+      <div>Con hora · ⚑ Solo fecha · 🔔 Aviso previo</div>
+      <div class="cal-carga">Carga del día: <i class="carga0"></i><i class="carga1"></i><i class="carga2"></i><i class="carga3"></i></div>
+      <label class="check"><input type="checkbox" data-cal="realizadas" ${c.realizadas ? 'checked' : ''}>Mostrar realizadas en gris</label>
+      <label class="field"><span class="cal-lbl">Horario visible</span><select class="input" data-cal="horario">${HORARIOS.map(([a, b]) => `<option value="${a}-${b}" ${a === ini && b === fin ? 'selected' : ''}>${a}:00 – ${b}:00</option>`).join('')}</select></label>
+      <label class="check"><input type="checkbox" data-cal="finde" ${c.finde ? 'checked' : ''}>Mostrar fin de semana</label>
+    </section>
+  </div>`;
+}
+
+// ---------- Arrastrar (ordenador y tablet) ----------
+// Un solo código para ratón y táctil (Pointer Events). En táctil hay que mantener pulsado ~400 ms,
+// para no mover notas al desplazar la pantalla. Los destinos llevan data-drop; las notas, data-drag.
+const ARR = { st: null, suprimirClick: false };
+const SOLTAR = {
+  prio: (st, destino) => {
+    const n = nota(st.id), p = destino && destino.dataset.prio;
+    if (!n || !p || p === n.prioridad) return null;
+    return { texto: `Al soltar: «${n.titulo}» pasa de ${PRIO_N[n.prioridad]} a ${PRIO_N[p]}`, pista: 'Soltar aquí para cambiar a ' + PRIO_N[p], hacer: () => cambiarPrioridad(n.id, p) };
+  },
+  // Calendario: en una hora de la Semana (pasos de 15 min), en la fila «⚑ Fecha límite» (sin hora) o en un día del Mes (misma hora).
+  cal: (st, d) => {
+    const n = nota(st.id), f = d.dataset.fecha;
+    if (!n || !f) return null;
+    let hora = n.hora_limite || null, hueco = null;
+    if (d.classList.contains('cal-col')) {
+      const [ini, fin] = calHorario(), r = d.getBoundingClientRect();
+      let m = ini * 60 + Math.round((st.y - (st.offY || 0) - r.top) / CAL_HH * 60 / 15) * 15;
+      m = Math.min(Math.max(m, ini * 60), fin * 60 - 15);
+      hora = pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+      hueco = { top: (m - ini * 60) / 60 * CAL_HH, alto: Math.max(durNota(n) / 60 * CAL_HH - 2, 20) };
+    } else if (d.dataset.sinhora) hora = null;
+    if (f === n.fecha_limite && hora === (n.hora_limite || null)) return null;
+    const donde = mayus(diaCorto(f).replace(',', '')) + (hora ? ', ' + hora : ' (sin hora)');
+    return { texto: `Al soltar: «${n.titulo}» → ${donde}`, pista: '', hueco: hueco && { ...hueco, texto: 'Soltar aquí · ' + donde },
+      hacer: () => moverNota(n.id, { fecha_limite: f, hora_limite: hora }, donde) };
+  },
+};
+// Estirar: el asa del borde inferior de un bloque de la Semana cambia la duración (pasos de 10 min).
+document.addEventListener('pointerdown', ev => {
+  const asa = ev.target.closest('[data-estirar]');
+  if (!asa || ev.button !== 0 || window.innerWidth < 900) return;
+  const el = asa.closest('.cal-ev'), n = el && nota(el.dataset.id);
+  if (!n) return;
+  ev.preventDefault(); ev.stopPropagation();
+  ARR.est = { el, id: n.id, y0: ev.clientY, dur0: durNota(n), dur: durNota(n) };
+  document.body.classList.add('estirando');
+}, true);
+document.addEventListener('pointermove', ev => {
+  const e = ARR.est; if (!e) return;
+  ev.preventDefault();
+  e.dur = Math.max(10, Math.round((e.dur0 + (ev.clientY - e.y0) / CAL_HH * 60) / 10) * 10);
+  e.el.style.height = Math.max(e.dur / 60 * CAL_HH - 2, 20) + 'px';
+  const d = e.el.querySelector('.d'); if (d) d.textContent = '· ' + textoDuracion(e.dur);
+});
+document.addEventListener('pointerup', () => {
+  const e = ARR.est; if (!e) return;
+  ARR.est = null; document.body.classList.remove('estirando');
+  ARR.suprimirClick = true; setTimeout(() => { ARR.suprimirClick = false; }, 0);
+  if (e.dur !== e.dur0) cambiarDuracion(e.id, e.dur); else renderBase();
+});
+document.addEventListener('pointerdown', ev => {
+  const el = ev.target.closest('[data-drag]');
+  if (!el || !SOLTAR[el.dataset.drag] || ev.button !== 0 || window.innerWidth < 900 || ev.target.closest('.tick')) return;
+  const st = { el, tipo: el.dataset.drag, id: el.dataset.id, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, activo: false, tactil: ev.pointerType !== 'mouse' };
+  // Al arrastrar un bloque de la Semana, la hora es la de su borde superior, no la del puntero.
+  if (el.classList.contains('cal-ev')) st.offY = ev.clientY - el.getBoundingClientRect().top;
+  if (st.tactil) st.timer = setTimeout(() => empezarArrastre(st), 400);
+  ARR.st = st;
+});
+document.addEventListener('pointermove', ev => {
+  const st = ARR.st; if (!st) return;
+  st.x = ev.clientX; st.y = ev.clientY;
+  const lejos = Math.hypot(st.x - st.x0, st.y - st.y0);
+  if (!st.activo) {
+    if (!st.tactil && lejos > 6) empezarArrastre(st);
+    else if (st.tactil && lejos > 10) finArrastre();   // es un desplazamiento, no un arrastre
+    return;
+  }
+  ev.preventDefault();
+  moverArrastre(st);
+});
+document.addEventListener('pointerup', () => {
+  const st = ARR.st; if (!st) return;
+  if (st.activo) { const r = st.res; ARR.suprimirClick = true; setTimeout(() => { ARR.suprimirClick = false; }, 0); finArrastre(); if (r) r.hacer(); }
+  else finArrastre();
+});
+document.addEventListener('pointercancel', () => finArrastre());
+document.addEventListener('click', ev => { if (ARR.suprimirClick) { ev.preventDefault(); ev.stopPropagation(); ARR.suprimirClick = false; } }, true);
+// Mientras se arrastra con el dedo, la pantalla no se desplaza.
+document.addEventListener('touchmove', ev => { if (ARR.st && ARR.st.activo) ev.preventDefault(); }, { passive: false });
+
+function empezarArrastre(st) {
+  if (ARR.st !== st) return;
+  st.activo = true;
+  const g = document.createElement('div');
+  g.className = 'drag-ghost';
+  g.innerHTML = `<b>${esc(st.el.dataset.titulo || '')}</b><span>${esc(st.el.dataset.cuando || '')}</span>`;
+  document.body.appendChild(g);
+  const info = document.createElement('div');
+  info.className = 'drag-info';
+  document.body.appendChild(info);
+  st.ghost = g; st.info = info;
+  document.body.classList.add('arrastrando');
+  st.el.classList.add('levantada');
+  moverArrastre(st);
+}
+function moverArrastre(st) {
+  st.ghost.style.transform = `translate(${st.x + 12}px, ${st.y - 18}px) rotate(-1.5deg)`;
+  const destino = (document.elementFromPoint(st.x, st.y) || document.body).closest(`[data-drop="${st.tipo}"]`);
+  const res = destino ? SOLTAR[st.tipo](st, destino) : null;
+  if (destino !== st.destino) { quitarMarca(st); st.destino = destino; }
+  st.res = res;
+  if (destino) {
+    destino.classList.toggle('drop', !!res);
+    const h = destino.querySelector('.mx-hint'); if (h) h.textContent = res ? res.pista : '';
+    // En la Semana se dibuja el hueco donde quedará la nota.
+    let hueco = destino.querySelector(':scope > .cal-hueco');
+    if (res && res.hueco) {
+      if (!hueco) { hueco = document.createElement('div'); hueco.className = 'cal-hueco'; destino.appendChild(hueco); }
+      hueco.style.top = res.hueco.top + 'px'; hueco.style.height = res.hueco.alto + 'px'; hueco.textContent = res.hueco.texto;
+    } else if (hueco) hueco.remove();
+  }
+  st.info.textContent = res ? res.texto : destino ? 'Ya está aquí' : st.tipo === 'cal' ? 'Suelta en un día o en una hora' : 'Suelta sobre otro bloque';
+}
+function quitarMarca(st) {
+  if (!st.destino) return;
+  st.destino.classList.remove('drop');
+  const h = st.destino.querySelector('.mx-hint'); if (h) h.textContent = '';
+  const hu = st.destino.querySelector(':scope > .cal-hueco'); if (hu) hu.remove();
+}
+function finArrastre() {
+  const st = ARR.st; if (!st) return;
+  clearTimeout(st.timer);
+  if (st.ghost) st.ghost.remove();
+  if (st.info) st.info.remove();
+  quitarMarca(st);
+  st.el.classList.remove('levantada');
+  document.body.classList.remove('arrastrando');
+  ARR.st = null;
 }
 // En el móvil, la barra de Agrupar y Filtros se queda fija justo debajo de la barra superior.
 function medirTopbar() {
@@ -622,7 +1069,16 @@ function pagina(titulo, cuerpo, pie, opt = {}) {
   </div></div>`;
 }
 
+// Al repintar la misma página (por ejemplo al pulsar un botón del editor) se conserva el desplazamiento.
 function renderOverlay() {
+  const r = ruta(), prev = $('#ov .page-body');
+  const sc = prev && S._ovRuta === r ? prev.scrollTop : 0;
+  pintarOverlay();
+  S._ovRuta = r;
+  const nb = $('#ov .page-body');
+  if (nb && sc) nb.scrollTop = sc;
+}
+function pintarOverlay() {
   const ov = $('#ov');
   const r = ruta();
   document.body.style.overflow = r ? 'hidden' : '';
@@ -636,6 +1092,7 @@ function renderOverlay() {
   if (a === 'historial') { ov.innerHTML = vistaHistorial(); if (S.ui.histTab === 'archivos') cargarArchivos(); return; }
   if (a === 'ajustes') { ov.innerHTML = vistaAjustes(); cargarDispositivos(); return; }
   if (a === 'revision') { if (!S.rev) iniciarRevision(); ov.innerHTML = vistaRevision(); return; }
+  if (a === 'resumen') { ov.innerHTML = vistaResumen(); return; }
   if (a === 'conflicto') { ov.innerHTML = vistaConflicto(); return; }
   ov.innerHTML = '';
 }
@@ -653,8 +1110,9 @@ function iniciarEditor(id) {
   S.ed = {
     ruta: ruta(), id: n ? n.id : null,
     d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
-        aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])] }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', hora_limite: '', aviso_unidad: '', aviso_cant: 1, subir_critica: true, etiquetas: preEtiquetas() },
+        aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])] }
+      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', hora_limite: '', aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas() },
+    durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
     sug: null, sel: 0,
   };
 }
@@ -688,6 +1146,12 @@ function vistaEditor() {
       <label class="field"><span>Hora <small>(opcional)</small></span><input class="input" type="time" data-ed="hora_limite" value="${esc(d.hora_limite)}"></label>
     </div>
     ${bloqueAvisos(d)}
+    <div class="field"><span class="field-label">Duración <small>(opcional · ocupa hueco en el calendario)</small></span>
+      <div class="dur-pick">${DURACIONES.map(([m, t]) => `<button type="button" data-act="ed-dur" data-v="${m}" aria-pressed="${!e.durOtra && Number(d.duracion) === m}">${t}</button>`).join('')}
+        <button type="button" data-act="ed-dur" data-v="otra" aria-pressed="${e.durOtra}">Otra…</button>
+        ${e.durOtra ? `<input class="input" type="number" min="1" max="1440" step="5" inputmode="numeric" data-ed="duracion" value="${esc(d.duracion)}" aria-label="Duración en minutos"> <small>min</small>` : ''}</div>
+      <small class="hint">Si no eliges nada, se reservan 10 minutos.</small>
+    </div>
     <label class="check"><input type="checkbox" data-ed="subir_critica" ${d.subir_critica ? 'checked' : ''}>Subir a Urgente cuando falten 24 h para la fecha límite</label>
     ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
     ${n && n.estado !== 'activa' ? `<div class="banner"><span class="grow">Esta nota está ${n.estado === 'realizada' ? 'realizada' : 'en la papelera'}.</span><button class="btn small" data-act="ed-reabrir">Volver a pendiente</button></div>` : ''}`;
@@ -714,6 +1178,12 @@ function bloqueAvisos(d) {
   return `<div class="field" id="ed-avisos"><span class="field-label">Avisos</span>${dentro}</div>`;
 }
 function pintarAvisos() { const b = $('#ed-avisos'); if (b && S.ed) b.outerHTML = bloqueAvisos(S.ed.d); }
+// Duración en minutos tal como se guarda. En una nota antigua sin duración, los 10 min por defecto no se guardan.
+function duracionGuardar(d, n) {
+  const m = Math.round(Number(d.duracion));
+  const v = m >= 1 && m <= 1440 ? m : DURACION_DEF;
+  return n && !n.duracion && v === DURACION_DEF ? null : v;
+}
 // Fecha, hora y aviso tal como se guardan (sin fecha no hay hora ni aviso).
 function camposFecha(d) {
   const f = d.fecha_limite || null, u = f && AVISO_RANGO[d.aviso_unidad] ? d.aviso_unidad : null;
@@ -722,7 +1192,7 @@ function camposFecha(d) {
 
 function guardarCambiosSilencio() {
   const e = S.ed, d = e.d, n = nota(e.id); if (!n || !d.titulo.trim()) return;
-  const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null, ...camposFecha(d), subir_critica: d.subir_critica ? 1 : 0 };
+  const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null, ...camposFecha(d), duracion: duracionGuardar(d, n), subir_critica: d.subir_critica ? 1 : 0 };
   const cambios = {};
   for (const k of Object.keys(campos)) if ((n[k] == null ? null : n[k]) !== campos[k] && !(k === 'cuerpo' && (n[k] || '') === campos[k])) cambios[k] = campos[k];
   if (JSON.stringify([...(n.etiquetas || [])].sort()) !== JSON.stringify([...d.etiquetas].sort())) cambios.etiquetas = d.etiquetas;
@@ -734,7 +1204,7 @@ function guardarEditor() {
   if (!titulo) { toast('Escribe un título para la nota.'); $('[data-ed="titulo"]') && $('[data-ed="titulo"]').focus(); return; }
   const campos = {
     titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null,
-    ...camposFecha(d), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
+    ...camposFecha(d), duracion: duracionGuardar(d, e.id ? nota(e.id) : null), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
   };
   if (e.id) {
     const n = nota(e.id), cambios = {};
@@ -796,7 +1266,6 @@ function elegirSug(i) {
 // ---------- Filtros ----------
 function vistaFiltros() {
   const f = S.ui.filtro;
-  const chip = (act, v, on, txt) => `<button class="chip" data-act="${act}" data-v="${esc(v)}" aria-pressed="${on}">${txt}</button>`;
   const porTipo = TIPOS.map(([t, nombre]) => {
     const es = S.etiquetas.filter(e => e.tipo === t && (!e.cerrada || f.etiquetas.includes(e.id)));
     return es.length ? `<div class="hint">${nombre}</div><div class="tags-edit">${es.map(e => chip('f-tag', e.id, f.etiquetas.includes(e.id), '#' + esc(e.nombre))).join('')}</div>` : '';
@@ -820,8 +1289,47 @@ function vistaFiltros() {
   return pagina('Filtrar notas', cuerpo, pie, { sheet: true });
 }
 
+// ---------- Resumen del día (al que lleva el aviso de cada mañana) ----------
+const RESUMEN_DEF = { activo: '1', hora: '07:00', dias: '1,2,3,4,5' };   // igual que en el worker
+const resumenCfg = k => S.srv['resumen_' + k] == null || S.srv['resumen_' + k] === '' ? RESUMEN_DEF[k] : S.srv['resumen_' + k];
+// Los ajustes del resumen se comparten entre dispositivos (config del worker).
+function guardarResumen(k, v) {
+  S.srv['resumen_' + k] = v;
+  encolar({ kind: 'config', method: 'PUT', path: '/config', body: { ['resumen_' + k]: v } });
+  guardarLocal();
+  if (ruta() === 'ajustes') renderOverlay();
+  const dias = resumenCfg('dias').split(',').filter(Boolean).map(d => DIAS_LARGOS[d - 1].slice(0, 3).toLowerCase());
+  toast(resumenCfg('activo') === '0' ? 'Resumen matutino desactivado' : `Resumen matutino a las ${resumenCfg('hora')} · ${dias.join(', ') || 'ningún día'}`);
+}
+function vistaResumen() {
+  const hoy = hoyYmd(), act = activas();
+  const obra = n => (n.etiquetas || []).map(etq).filter(Boolean).map(e => e.nombre)[0] || '';
+  const conHora = act.filter(n => n.fecha_limite === hoy && n.hora_limite).sort(ordenFecha);
+  const urgentes = act.filter(n => n.prioridad === 'critica').sort(ordenFecha);
+  const plazos = act.filter(n => n.fecha_limite === hoy && !n.hora_limite && n.prioridad !== 'critica');
+  const quietas = act.filter(estancada).sort((a, b) => String(a.actualizada || a.creada).localeCompare(String(b.actualizada || b.creada)));
+  const dias = n => Math.floor((Date.now() - Date.parse(n.actualizada || n.creada)) / DIA);
+  const fila = (n, izq, clase, sub) => `<button class="res-fila" data-act="abrir" data-id="${esc(n.id)}"><span class="res-izq ${clase}">${esc(izq)}</span>
+    <span class="res-txt"><b>${esc(n.titulo)}</b>${sub ? `<small>${esc(sub)}</small>` : ''}</span></button>`;
+  const seccion = (titulo, lista, f) => lista.length ? `<section class="res-sec"><h2>${titulo}</h2><div class="res-lista">${lista.map(f).join('')}</div></section>` : '';
+  const ahora = new Date();
+  const cuerpo = `<div class="res-cab"><div class="hint">${esc(mayus(ahora.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' })))} · ${esc(hora(ahora))}</div><h2>Buenos días</h2></div>
+    <div class="res-cont">
+      <div class="res-n urg"><b>${urgentes.length}</b><span>${urgentes.length === 1 ? 'Urgente' : 'Urgentes'}</span></div>
+      <div class="res-n"><b>${conHora.length}</b><span>Con hora hoy</span></div>
+      <div class="res-n"><b>${quietas.length}</b><span>Sin tocar</span></div>
+    </div>
+    ${seccion('Hoy con hora', conHora, n => fila(n, n.hora_limite, 'azul', obra(n) && '#' + obra(n)))}
+    ${seccion('Urgentes', urgentes, n => fila(n, !n.fecha_limite ? '—' : n.fecha_limite === hoy ? 'Hoy' : n.fecha_limite < hoy ? 'Venció' : mayus(diaCorto(n.fecha_limite).split(',')[0]), 'rojo', [obra(n) && '#' + obra(n), (per(n.persona_id) || {}).nombre].filter(Boolean).join(' · ')))}
+    ${seccion('Plazos de hoy', plazos, n => fila(n, '⚑', 'azul', [PRIO_N[n.prioridad], obra(n) && '#' + obra(n)].filter(Boolean).join(' · ')))}
+    ${seccion('Sin tocar desde hace días', quietas, n => fila(n, dias(n) + ' d', 'gris', obra(n) && '#' + obra(n)))}
+    ${!conHora.length && !urgentes.length && !plazos.length && !quietas.length ? '<div class="empty"><h2>Todo en orden</h2><p>Hoy no hay nada urgente ni pendiente con hora.</p></div>' : ''}`;
+  return pagina('Resumen del día', cuerpo, `<button class="btn primary" data-act="ir-panel">Ir al panel</button>`);
+}
+
 function vistaMenu() {
   const cuerpo = `<div class="list-plain">
+    <div><a class="btn link" href="#/resumen" data-reemplazar>Resumen del día</a></div>
     <div><a class="btn link" href="#/revision" data-reemplazar>Revisión semanal</a></div>
     <div><a class="btn link" href="#/historial" data-reemplazar>Historial y papelera</a></div>
     <div><a class="btn link" href="#/ajustes" data-reemplazar>Ajustes</a></div>
@@ -984,7 +1492,8 @@ function propuestaDe(n, a) {
     evidencias: n.evidencias || [],
     nuevas: (n.etiquetas_nuevas || []).map(x => ({ ...x, decision: '' })),
     persona_id: (S.personas.find(p => norm(p.nombre) === norm(n.persona)) || {}).id || '',
-    fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '', aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 0, duracion: n.duracion || 0,
+    fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '', aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 0,
+    duracion: n.duracion || DURACION_DEF, durDefecto: !n.duracion,
   };
 }
 
@@ -1024,6 +1533,7 @@ function tarjetaPropuesta(p, i) {
       <label class="field"><small>Asignar a</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">Nadie</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
       <label class="field"><small>Aviso previo</small><select class="input" data-p="${i}" data-f="aviso"><option value="">Ninguno</option>${Object.keys(AVISO_RANGO).map(u => `<optgroup label="${AVISO_N[u][1][0].toUpperCase() + AVISO_N[u][1].slice(1)}">${Array.from({ length: AVISO_RANGO[u] }, (_, j) => j + 1).map(c => `<option value="${u}:${c}" ${p.aviso_unidad === u && p.aviso_cant === c ? 'selected' : ''}>${textoAntelacion(u, c)}</option>`).join('')}</optgroup>`).join('')}</select></label>
     </div>
+    <label class="field"><small>Duración · ${p.durDefecto ? 'por defecto' : 'la que se ha entendido'}</small><select class="input" data-p="${i}" data-f="duracion">${[...new Set([...DURACIONES.map(x => x[0]), p.duracion])].sort((a, b) => a - b).map(m => `<option value="${m}" ${p.duracion === m ? 'selected' : ''}>${textoDuracion(m)}</option>`).join('')}</select></label>
   </article>`;
 }
 async function guardarDictado() {
@@ -1217,6 +1727,13 @@ function vistaAjustes() {
     <p class="hint">Ese día aparecerá un aviso para repasar las notas atrasadas y las que llevan más de ${ESTANCADA_DIAS} días sin tocar.</p>
   </section>
 
+  <section class="card"><h2>Resumen matutino</h2>
+    <label class="check"><input type="checkbox" data-resumen="activo" ${resumenCfg('activo') !== '0' ? 'checked' : ''}>Recibir cada mañana un aviso con lo pendiente</label>
+    <label class="field"><span>Hora</span><input class="input" type="time" data-resumen="hora" value="${esc(resumenCfg('hora'))}" style="max-width:160px"></label>
+    <div class="field"><span class="field-label">Días</span><div class="tags-edit">${DIAS_LARGOS.map((d, i) => chip('res-dia', String(i + 1), resumenCfg('dias').split(',').includes(String(i + 1)), d.slice(0, 3))).join('')}</div></div>
+    <p class="hint">Solo llega si hay algo urgente, con hora hoy o sin tocar desde hace más de ${ESTANCADA_DIAS} días. <a href="#/resumen" data-reemplazar>Ver el resumen de hoy</a></p>
+  </section>
+
   <section class="card"><h2>Copia de seguridad</h2>
     <p class="hint">Descarga todas tus notas, etiquetas, personas y grupos en un archivo.</p>
     <div class="row"><button class="btn" data-act="exportar">Descargar copia</button></div>
@@ -1342,6 +1859,12 @@ const ACT = {
   'modal-cerrar': () => { S.modal = null; renderModal(); },
   hecha: (el) => marcarRealizada(el.dataset.id, el.closest('.nota')),
   abrir: (el) => { location.hash = '#/nota/' + el.dataset.id; },
+  'ir-panel': () => { location.hash = '#/'; },
+  'res-dia': (el) => {
+    const dias = new Set(resumenCfg('dias').split(',').filter(Boolean));
+    if (dias.has(el.dataset.v)) dias.delete(el.dataset.v); else dias.add(el.dataset.v);
+    guardarResumen('dias', [...dias].sort().join(','));
+  },
   buscar: () => { S.ui.buscar = true; renderBase(); const q = $('#qm'); if (q) q.focus(); },
   'cerrar-buscar': () => { S.ui.buscar = false; S.ui.q = ''; renderBase(); },
   vista: (el) => {
@@ -1352,6 +1875,25 @@ const ACT = {
     guardarUi(); renderBase();
   },
   agrupar: (el) => { S.ui.agrupar = el.dataset.v; guardarUi(); renderBase(); },
+  modo: (el) => { S.ui.modo = el.dataset.v; guardarUi(); renderBase(); window.scrollTo(0, 0); },
+  'mx-mas': (el) => { S.ui.matrizMas[el.dataset.v] = !S.ui.matrizMas[el.dataset.v]; renderBase(); },
+  'quitar-grupo-vista': () => { S.ui.grupoVista = ''; guardarUi(); renderBase(); },
+  'cal-vista': (el) => { cal().vista = el.dataset.v; guardarUi(); renderBase(); },
+  'cal-hoy': () => { cal().ref = hoyYmd(); renderBase(); },
+  // Agenda del móvil: tocar un día de la tira lleva a sus notas.
+  'calm-ir': (el) => {
+    const s = document.getElementById('calm-' + el.dataset.v);
+    if (s) window.scrollTo({ top: s.getBoundingClientRect().top + window.scrollY - (document.querySelector('.toolbar').getBoundingClientRect().bottom + 8), behavior: 'smooth' });
+    else toast(el.dataset.v < hoyYmd() ? 'Día pasado: lo pendiente está en Atrasadas.' : 'Ese día no tiene notas.');
+  },
+  'cal-mover': (el) => {
+    const c = cal(), k = Number(el.dataset.v);
+    if (c.vista === 'mes') { const [y, m] = c.ref.split('-').map(Number); c.ref = ymd(new Date(y, m - 1 + k, 1)); }
+    else c.ref = addDias(c.ref, 7 * k);
+    renderBase();
+  },
+  // Un día del mes (o del mes pequeño) abre su semana.
+  'cal-dia': (el) => { const c = cal(); c.ref = el.dataset.v; c.vista = 'semana'; guardarUi(); renderBase(); },
   'limpiar-filtro': () => { S.ui.filtro = filtroVacio(); S.ui.vista = null; guardarUi(); renderBase(); if (ruta() === 'filtros') renderOverlay(); },
   'guardar-grupo': () => { if (!filtroActivo(S.ui.filtro)) return; S.modal = { tipo: 'grupo', id: null }; renderModal(); setTimeout(() => $('#mg-nombre') && $('#mg-nombre').focus(), 50); },
   'actualizar-grupo': () => {
@@ -1372,6 +1914,12 @@ const ACT = {
 
   // Editor
   'ed-prio': (el) => { S.ed.d.prioridad = el.dataset.v; renderOverlay(); },
+  'ed-dur': (el) => {
+    if (el.dataset.v === 'otra') S.ed.durOtra = true;
+    else { S.ed.durOtra = false; S.ed.d.duracion = Number(el.dataset.v); }
+    renderOverlay();
+    if (S.ed.durOtra) { const i = $('[data-ed="duracion"]'); if (i) i.focus(); }
+  },
   'ed-aviso': (el) => { const d = S.ed.d; d.aviso_unidad = el.dataset.v; if (d.aviso_unidad) d.aviso_cant = Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[d.aviso_unidad]); pintarAvisos(); },
   'ed-quitar-tag': (el) => { S.ed.d.etiquetas = S.ed.d.etiquetas.filter(x => x !== el.dataset.id); renderOverlay(); },
   'ed-hash': () => {
@@ -1585,11 +2133,13 @@ document.addEventListener('input', ev => {
     S.ed.d[t.dataset.ed] = t.type === 'checkbox' ? t.checked : t.value;
     if (t.dataset.ed === 'cuerpo') onCuerpo(t);
     if (['fecha_limite', 'hora_limite', 'aviso_cant'].includes(t.dataset.ed)) pintarAvisos();
+    if (t.dataset.ed === 'duracion') S.ed.d.duracion = Number(t.value);
     return;
   }
   if (t.dataset.p != null && S.dic) {
     const p = S.dic.propuestas[t.dataset.p], f = t.dataset.f;
     if (f === 'incluir') { p.incluir = t.checked; renderOverlay(); return; }
+    if (f === 'duracion') { p.duracion = Number(t.value); p.durDefecto = false; renderOverlay(); return; }
     if (f === 'aviso') { const [u, c] = t.value.split(':'); p.aviso_unidad = u || ''; p.aviso_cant = Number(c) || 0; return; }
     if (f === 'add-tag') { if (t.value) { p.etiquetas.push(t.value); renderOverlay(); } return; }
     p[f] = t.value;
@@ -1600,6 +2150,23 @@ document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.dataset.ed && S.ed && t.type === 'checkbox') S.ed.d[t.dataset.ed] = t.checked;
   if (t.dataset.p != null && S.dic && (t.dataset.f === 'add-tag' || t.dataset.f === 'incluir')) return;
+  if (t.matches('[data-grupo-vista]')) { S.ui.grupoVista = t.value; guardarUi(); renderBase(); return; }
+  if (t.dataset.resumen) {
+    if (t.dataset.resumen === 'activo') guardarResumen('activo', t.checked ? '1' : '0');
+    else if (/^\d{2}:\d{2}$/.test(t.value)) guardarResumen('hora', t.value);
+    return;
+  }
+  if (t.dataset.cal) {
+    const c = cal();
+    if (t.dataset.cal === 'horario') {
+      const [a, b] = t.value.split('-');
+      S.srv.cal_inicio = a; S.srv.cal_fin = b;
+      encolar({ kind: 'config', method: 'PUT', path: '/config', body: { cal_inicio: a, cal_fin: b } });
+      guardarLocal();
+    } else { c[t.dataset.cal] = t.checked; guardarUi(); }
+    renderBase();
+    return;
+  }
   if (t.id === 'rev-dia') {
     S.srv.revision_dia = t.value;
     encolar({ kind: 'config', method: 'PUT', path: '/config', body: { revision_dia: t.value } });
@@ -1658,7 +2225,7 @@ async function arrancar() {
     if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; }
     if (ob) { S.outbox = (ob.outbox || []).map(o => ({ ...o, enviando: false })); S.conflictos = ob.conflictos || []; }
     if (audios) S.audios = audios;
-    if (ui) { S.ui.agrupar = ui.agrupar || 'fecha'; S.ui.vista = ui.vista || null; S.ui.filtro = { ...filtroVacio(), ...(ui.filtro || {}) }; }
+    if (ui) { S.ui.modo = MODOS.some(m => m[0] === ui.modo) ? ui.modo : 'lista'; S.ui.grupoVista = ui.grupoVista || ''; if (ui.cal) Object.assign(S.ui.cal, ui.cal, { ref: '' }); S.ui.agrupar = ui.agrupar || 'fecha'; S.ui.vista = ui.vista || null; S.ui.filtro = { ...filtroVacio(), ...(ui.filtro || {}) }; }
   } catch (e) { console.warn('Almacenamiento local no disponible', e); }
   renderBase();
   renderOverlay();
