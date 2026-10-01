@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -514,7 +514,9 @@ function renderBase() {
     <nav class="sidebar" aria-label="Grupos filtrados">
       ${sideItem(sidebarItems[0], cur)}
       <div class="side-head"><span>Grupos filtrados</span><button class="btn small" data-act="guardar-grupo" title="Guardar los filtros actuales como grupo" ${filtroActivo(S.ui.filtro) ? '' : 'disabled'}>+ Guardar</button></div>
-      ${sidebarItems.slice(1).map(it => sideItem(it, cur)).join('') || '<p class="hint" style="padding:4px 12px">Aplica filtros y guárdalos como grupo para volver a ellos con un clic.</p>'}
+      <div class="side-groups">
+        ${sidebarItems.slice(1).map(it => sideItem(it, cur)).join('') || '<p class="hint" style="padding:4px 12px">Aplica filtros y guárdalos como grupo para volver a ellos con un clic.</p>'}
+      </div>
       <div class="side-foot">
         <a class="side-item" href="#/revision"><span class="grow"><b>Revisión semanal</b></span></a>
         <a class="side-item" href="#/historial"><span class="grow"><b>Historial y papelera</b></span></a>
