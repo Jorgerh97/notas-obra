@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9,13 +9,17 @@ const norm = s => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2, 12));
 const DIA = 86400000;
 const PRIOS = ['critica', 'alta', 'normal', 'baja'];
-const PRIO_N = { critica: 'Crítica', alta: 'Alta', normal: 'Normal', baja: 'Baja' };
+const PRIO_N = { critica: 'Urgente', alta: 'Alta', normal: 'Normal', baja: 'Baja' };   // "critica" es el valor guardado
 const TIPOS = [['obra', 'Obras'], ['industrial', 'Industriales'], ['accion', 'Acciones'], ['responsable', 'Responsables'], ['otra', 'Otras']];
 const TIPO_1 = { obra: 'Obra', industrial: 'Industrial', accion: 'Acción', responsable: 'Responsable', otra: 'Otra' };
 const DIAS_SEM = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 const TAG_RE = /^[\p{L}\p{N}_-]{1,40}$/u;
 const ESTANCADA_DIAS = 10;
 const AUDIO_DIAS = 7;
+const AVISO_RANGO = { h: 12, d: 7, s: 4 };   // horas, días o semanas antes (desde 1)
+const AVISO_N = { h: ['hora', 'horas'], d: ['día', 'días'], s: ['semana', 'semanas'] };
+const HORA_AVISO = '08:00';                  // hora de los avisos cuando la fecha límite no tiene hora
+const CAMPOS_AVISO = ['fecha_limite', 'hora_limite', 'aviso_cant', 'aviso_unidad'];
 
 const ICON = {
   mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
@@ -38,8 +42,6 @@ const diaCorto = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); re
 const diaLargo = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }); };
 const hora = iso => new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 const fechaCorta = iso => iso ? new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : '';
-const isoALocal = iso => { if (!iso) return ''; const d = new Date(iso); return ymd(d) + 'T' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
-const localAIso = v => v ? new Date(v).toISOString() : null;
 const ahoraLocal = () => new Date().toLocaleString('es-ES', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 const relDia = ymdStr => {
   const h = hoyYmd();
@@ -48,6 +50,27 @@ const relDia = ymdStr => {
   if (ymdStr === addDias(h, -1)) return 'ayer';
   return diaCorto(ymdStr);
 };
+
+// ---------- Avisos ----------
+// A la hora límite se avisa siempre; además puede haber un aviso con antelación.
+// Es el mismo cálculo que hace el worker, para ver el próximo aviso también sin conexión.
+const textoAntelacion = (u, c) => c + ' ' + AVISO_N[u][c === 1 ? 0 : 1] + ' antes';
+const avisoValido = (u, c) => !!AVISO_RANGO[u] && c >= 1 && c <= AVISO_RANGO[u];
+function momentosAviso(n) {
+  if (!n.fecha_limite) return [];
+  const t = (f, h) => { const [y, m, d] = f.split('-').map(Number), [hh, mm] = h.split(':').map(Number); return new Date(y, m - 1, d, hh, mm).getTime(); };
+  const base = n.hora_limite || HORA_AVISO, c = Number(n.aviso_cant), out = [];
+  if (n.hora_limite) out.push(t(n.fecha_limite, n.hora_limite));
+  if (avisoValido(n.aviso_unidad, c)) {
+    out.push(n.aviso_unidad === 'h' ? t(n.fecha_limite, base) - c * 3600000 : t(addDias(n.fecha_limite, -c * (n.aviso_unidad === 's' ? 7 : 1)), base));
+  }
+  return out;
+}
+function proximoAviso(n, despues = Date.now()) {
+  const t = momentosAviso(n).filter(x => x > despues).sort((a, b) => a - b)[0];
+  return t ? new Date(t).toISOString() : null;
+}
+const textoAviso = n => avisoValido(n.aviso_unidad, Number(n.aviso_cant)) ? textoAntelacion(n.aviso_unidad, Number(n.aviso_cant)) : '';
 
 // ---------- Almacenamiento local (IndexedDB) ----------
 const idb = {
@@ -250,7 +273,8 @@ function crearNotaLocal(campos) {
   const t = new Date().toISOString();
   const n = {
     id: uid(), titulo: campos.titulo, cuerpo: campos.cuerpo || '', prioridad: campos.prioridad || 'normal', estado: 'activa',
-    persona_id: campos.persona_id || null, fecha_limite: campos.fecha_limite || null, alarma: campos.alarma || null,
+    persona_id: campos.persona_id || null, fecha_limite: campos.fecha_limite || null, hora_limite: campos.hora_limite || null,
+    aviso_cant: campos.aviso_cant || null, aviso_unidad: campos.aviso_unidad || null, alarma: proximoAviso(campos),
     subir_critica: campos.subir_critica === false ? 0 : 1, duracion: campos.duracion || null, origen: campos.origen || 'manual',
     creada: t, actualizada: t, version: 1, etiquetas: campos.etiquetas || [], alarma_enviada: 0,
   };
@@ -264,13 +288,14 @@ function editarNotaLocal(id, cambios) {
   const n = nota(id);
   if (!n) return;
   const t = new Date().toISOString();
+  if ('fecha_limite' in cambios && !cambios.fecha_limite) Object.assign(cambios, { hora_limite: null, aviso_cant: null, aviso_unidad: null });
   Object.assign(n, cambios, { actualizada: t });
+  if (CAMPOS_AVISO.some(k => k in cambios)) { n.alarma = proximoAviso(n); n.alarma_enviada = 0; }
   if ('estado' in cambios) {
     if (cambios.estado === 'realizada') { n.realizada_en = t; n.borrar_en = new Date(Date.now() + 365 * DIA).toISOString(); }
     if (cambios.estado === 'papelera') { n.eliminada_en = t; n.borrar_en = new Date(Date.now() + 30 * DIA).toISOString(); }
     if (cambios.estado === 'activa') { n.realizada_en = null; n.eliminada_en = null; n.borrar_en = null; }
   }
-  if ('alarma' in cambios) { n.alarma_enviada = 0; S.alarmasVistas.delete(id); }
   encolar({ kind: 'nota', ref: id, method: 'PUT', path: '/notas/' + id, body: { ...cambios, base_version: n.version } });
   guardarLocal();
 }
@@ -305,7 +330,7 @@ function cumpleFiltro(n, f) {
     const p = n.persona_id || 'ninguna';
     if (!f.personas.includes(p)) return false;
   }
-  if (f.conAlarma && !n.alarma) return false;
+  if (f.conAlarma && !(n.alarma || n.hora_limite || n.aviso_unidad)) return false;
   if (f.venceSemana) { const fe = fechaEfectiva(n); if (!fe || fe > finSemana()) return false; }
   if (f.estancadas && !estancada(n)) return false;
   return true;
@@ -321,7 +346,7 @@ const rankPrio = p => PRIOS.indexOf(p);
 function ordenar(a, b) {
   return rankPrio(a.prioridad) - rankPrio(b.prioridad)
     || String(fechaEfectiva(a) || '9999').localeCompare(String(fechaEfectiva(b) || '9999'))
-    || String(a.alarma || '').localeCompare(String(b.alarma || ''))
+    || String(a.hora_limite || '99:99').localeCompare(String(b.hora_limite || '99:99'))
     || String(a.creada).localeCompare(String(b.creada));
 }
 function visibles() {
@@ -434,10 +459,13 @@ function textoCuando(n) {
   const partes = [];
   const h = hoyYmd();
   if (n.fecha_limite) {
-    const late = n.fecha_limite < h;
-    partes.push(`<span class="${late ? 'late' : ''}">${late ? 'venció ' + esc(diaCorto(n.fecha_limite)) : '⚑ ' + esc(relDia(n.fecha_limite))}</span>`);
+    const hl = n.hora_limite ? ' ' + n.hora_limite : '';
+    const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
+    partes.push(`<span class="${late ? 'late' : ''}">${late ? 'venció ' + esc((n.fecha_limite === h ? 'hoy' : diaCorto(n.fecha_limite)) + hl) : '⚑ ' + esc(relDia(n.fecha_limite) + hl)}</span>`);
   }
-  if (n.alarma) {
+  // El aviso de la hora límite ya se ve en la fecha; aquí solo se muestra el aviso previo.
+  const enLimite = n.alarma && n.hora_limite && Date.parse(n.alarma) === momentosAviso({ fecha_limite: n.fecha_limite, hora_limite: n.hora_limite })[0];
+  if (n.alarma && !enLimite) {
     const d = ymd(n.alarma);
     partes.push(`<span class="alarm">🔔 ${d === h ? '' : esc(relDia(d)) + ' '}${esc(hora(n.alarma))}</span>`);
   }
@@ -472,7 +500,7 @@ function chipsFiltro() {
   if (f.etiquetas.length) out.push(f.etiquetas.map(id => '#' + ((etq(id) || {}).nombre || '?')).join(f.modo === 'alguna' ? ' o ' : ' y '));
   if (f.prioridades.length) out.push(f.prioridades.map(p => PRIO_N[p]).join(', '));
   if (f.personas.length) out.push(f.personas.map(id => id === 'ninguna' ? 'Sin asignar' : (per(id) || {}).nombre).join(', '));
-  if (f.conAlarma) out.push('Con alarma');
+  if (f.conAlarma) out.push('Con avisos');
   if (f.venceSemana) out.push('Vencen esta semana');
   if (f.estancadas) out.push('Sin tocar 10+ días');
   return out;
@@ -483,7 +511,7 @@ function renderBase() {
   if (!base) return;
   const lista = visibles();
   const total = activas().length;
-  const criticas = activas().filter(n => n.prioridad === 'critica').length;
+  const urgentes = activas().filter(n => n.prioridad === 'critica').length;
   const grupos = agrupar(lista);
   const sidebarItems = [{ id: '', nombre: 'Todas las notas', regla: '', n: total }]
     .concat(S.vistas.map(v => ({ id: v.id, nombre: v.nombre, regla: resumenFiltro(v.filtro), n: activas().filter(n => cumpleFiltro(n, { ...filtroVacio(), ...v.filtro })).length })));
@@ -500,13 +528,13 @@ function renderBase() {
 
   base.innerHTML = `
   <header class="topbar">
-    <div class="title"><h1>Notas</h1><span class="count">${total} activas${criticas ? ' · ' + criticas + (criticas === 1 ? ' crítica' : ' críticas') : ''}</span></div>
+    <div class="title"><h1>Notas</h1><span class="count">${total} activas${urgentes ? ' · ' + urgentes + (urgentes === 1 ? ' urgente' : ' urgentes') : ''}</span></div>
     <label class="search desk-only">${ICON.search}<input id="q" type="search" placeholder="Buscar en notas, etiquetas o personas" value="${esc(S.ui.q)}" aria-label="Buscar"></label>
     <span class="spacer desk-only"></span>
     <span id="sync" class="status" title="${esc(S.sync.msg)}">${esc(textoSync())}</span>
     <button class="icon-btn mob-only" data-act="buscar" aria-label="Buscar">${ICON.search}</button>
     <a class="icon-btn mob-only" href="#/menu" aria-label="Menú">${ICON.menu}</a>
-    <a class="btn pill orange desk-only" href="#/dictado">${ICON.mic}Dictar</a>
+    <a class="btn pill orange desk-only" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>
     <a class="btn pill primary desk-only" href="#/nota/nueva">${ICON.plus}Nueva nota</a>
   </header>
   ${S.ui.buscar ? `<div class="mob-only" style="padding:8px 16px 0"><label class="search">${ICON.search}<input id="qm" type="search" placeholder="Buscar" value="${esc(S.ui.q)}" aria-label="Buscar"><button class="icon-btn" data-act="cerrar-buscar" aria-label="Cerrar búsqueda" style="width:34px;height:34px">${ICON.close}</button></label></div>` : ''}
@@ -554,10 +582,17 @@ function renderBase() {
     </main>
   </div>
   <div class="bottombar">
-    <a class="btn pill orange" href="#/dictado">${ICON.mic}Dictar</a>
+    <a class="btn pill orange" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>
     <a class="btn pill primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a>
   </div>`;
+  medirTopbar();
 }
+// En el móvil, la barra de Agrupar y Filtros se queda fija justo debajo de la barra superior.
+function medirTopbar() {
+  const tb = $('.topbar');
+  if (tb) document.documentElement.style.setProperty('--topbar-h', tb.offsetHeight + 'px');
+}
+window.addEventListener('resize', medirTopbar);
 function sideItem(it, cur) {
   return `<button class="side-item" data-act="vista" data-id="${esc(it.id)}" aria-current="${cur === it.id}"><span class="grow"><b>${esc(it.nombre)}</b>${it.regla ? `<small>${esc(it.regla)}</small>` : ''}</span><span class="n">${it.n}</span></button>`;
 }
@@ -568,7 +603,7 @@ function resumenFiltro(f) {
   return r;
 }
 function vacio(total) {
-  if (!total) return `<div class="empty"><h2>Todavía no hay notas</h2><p>Dicta lo que tengas pendiente o escribe tu primera nota.</p><div class="row"><a class="btn orange" href="#/dictado">${ICON.mic}Dictar</a><a class="btn primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a></div></div>`;
+  if (!total) return `<div class="empty"><h2>Todavía no hay notas</h2><p>Dicta lo que tengas pendiente o escribe tu primera nota.</p><div class="row"><a class="btn orange" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a><a class="btn primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a></div></div>`;
   return `<div class="empty"><h2>No hay notas con estos filtros</h2><p>Prueba a quitar algún filtro o a cambiar la búsqueda.</p><button class="btn" data-act="limpiar-filtro">Quitar filtros</button></div>`;
 }
 
@@ -617,8 +652,9 @@ function iniciarEditor(id) {
   const n = id && id !== 'nueva' ? nota(id) : null;
   S.ed = {
     ruta: ruta(), id: n ? n.id : null,
-    d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', alarma: isoALocal(n.alarma), subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])] }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', alarma: '', subir_critica: true, etiquetas: preEtiquetas() },
+    d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
+        aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])] }
+      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', hora_limite: '', aviso_unidad: '', aviso_cant: 1, subir_critica: true, etiquetas: preEtiquetas() },
     sug: null, sel: 0,
   };
 }
@@ -649,9 +685,10 @@ function vistaEditor() {
     </label>
     <div class="grid2">
       <label class="field"><span>Fecha límite</span><input class="input" type="date" data-ed="fecha_limite" value="${esc(d.fecha_limite)}"></label>
-      <label class="field"><span>Alarma</span><input class="input" type="datetime-local" data-ed="alarma" value="${esc(d.alarma)}"></label>
+      <label class="field"><span>Hora <small>(opcional)</small></span><input class="input" type="time" data-ed="hora_limite" value="${esc(d.hora_limite)}"></label>
     </div>
-    <label class="check"><input type="checkbox" data-ed="subir_critica" ${d.subir_critica ? 'checked' : ''}>Subir a Crítica cuando falten 24 h para la fecha límite</label>
+    ${bloqueAvisos(d)}
+    <label class="check"><input type="checkbox" data-ed="subir_critica" ${d.subir_critica ? 'checked' : ''}>Subir a Urgente cuando falten 24 h para la fecha límite</label>
     ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
     ${n && n.estado !== 'activa' ? `<div class="banner"><span class="grow">Esta nota está ${n.estado === 'realizada' ? 'realizada' : 'en la papelera'}.</span><button class="btn small" data-act="ed-reabrir">Volver a pendiente</button></div>` : ''}`;
   const pie = n && n.estado === 'activa'
@@ -660,9 +697,32 @@ function vistaEditor() {
   return pagina(e.id ? 'Editar nota' : 'Nueva nota', cuerpo, pie);
 }
 
+// Avisos del editor: se repintan solos al cambiar la fecha, la hora o la antelación.
+function bloqueAvisos(d) {
+  let dentro;
+  if (!d.fecha_limite) dentro = '<p class="hint">Pon una fecha límite para recibir avisos.</p>';
+  else {
+    const u = d.aviso_unidad, cant = Number(d.aviso_cant) || 1;
+    const prox = proximoAviso({ ...d, aviso_cant: cant });
+    dentro = `<p class="hint">${d.hora_limite ? 'Te aviso a la hora límite. ¿Quieres otro aviso antes?' : 'Sin hora límite, los avisos suenan a las 8:00. ¿Cuánto antes?'}</p>
+      <div class="aviso-pick">
+        <div class="seg">${[['', 'Ninguno'], ['h', 'Horas'], ['d', 'Días'], ['s', 'Semanas']].map(([v, t]) => `<button type="button" data-act="ed-aviso" data-v="${v}" aria-pressed="${(u || '') === v}">${t}</button>`).join('')}</div>
+        ${u ? `<select class="input" data-ed="aviso_cant" aria-label="Cuánto antes avisar">${Array.from({ length: AVISO_RANGO[u] }, (_, i) => i + 1).map(i => `<option value="${i}" ${cant === i ? 'selected' : ''}>${textoAntelacion(u, i)}</option>`).join('')}</select>` : ''}
+      </div>
+      <p class="hint">${prox ? '🔔 Próximo aviso: ' + esc(relDia(ymd(prox))) + ' a las ' + esc(hora(prox)) : d.hora_limite || u ? 'La hora de los avisos ya ha pasado.' : 'Sin avisos.'}</p>`;
+  }
+  return `<div class="field" id="ed-avisos"><span class="field-label">Avisos</span>${dentro}</div>`;
+}
+function pintarAvisos() { const b = $('#ed-avisos'); if (b && S.ed) b.outerHTML = bloqueAvisos(S.ed.d); }
+// Fecha, hora y aviso tal como se guardan (sin fecha no hay hora ni aviso).
+function camposFecha(d) {
+  const f = d.fecha_limite || null, u = f && AVISO_RANGO[d.aviso_unidad] ? d.aviso_unidad : null;
+  return { fecha_limite: f, hora_limite: f && d.hora_limite ? d.hora_limite : null, aviso_unidad: u, aviso_cant: u ? Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[u]) : null };
+}
+
 function guardarCambiosSilencio() {
   const e = S.ed, d = e.d, n = nota(e.id); if (!n || !d.titulo.trim()) return;
-  const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null, fecha_limite: d.fecha_limite || null, alarma: localAIso(d.alarma), subir_critica: d.subir_critica ? 1 : 0 };
+  const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null, ...camposFecha(d), subir_critica: d.subir_critica ? 1 : 0 };
   const cambios = {};
   for (const k of Object.keys(campos)) if ((n[k] == null ? null : n[k]) !== campos[k] && !(k === 'cuerpo' && (n[k] || '') === campos[k])) cambios[k] = campos[k];
   if (JSON.stringify([...(n.etiquetas || [])].sort()) !== JSON.stringify([...d.etiquetas].sort())) cambios.etiquetas = d.etiquetas;
@@ -674,7 +734,7 @@ function guardarEditor() {
   if (!titulo) { toast('Escribe un título para la nota.'); $('[data-ed="titulo"]') && $('[data-ed="titulo"]').focus(); return; }
   const campos = {
     titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null,
-    fecha_limite: d.fecha_limite || null, alarma: localAIso(d.alarma), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
+    ...camposFecha(d), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
   };
   if (e.id) {
     const n = nota(e.id), cambios = {};
@@ -750,7 +810,7 @@ function vistaFiltros() {
     <section class="field"><span class="field-label">Prioridad</span><div class="tags-edit">${PRIOS.map(p => chip('f-prio', p, f.prioridades.includes(p), PRIO_N[p])).join('')}</div></section>
     <section class="field"><span class="field-label">Asignada a</span><div class="tags-edit">${S.personas.map(p => chip('f-per', p.id, f.personas.includes(p.id), esc(p.nombre))).join('')}${chip('f-per', 'ninguna', f.personas.includes('ninguna'), 'Sin asignar')}</div></section>
     <section class="field"><span class="field-label">Otros</span>
-      <label class="check"><input type="checkbox" data-act="f-bool" data-v="conAlarma" ${f.conAlarma ? 'checked' : ''}>Con alarma</label>
+      <label class="check"><input type="checkbox" data-act="f-bool" data-v="conAlarma" ${f.conAlarma ? 'checked' : ''}>Con avisos</label>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="venceSemana" ${f.venceSemana ? 'checked' : ''}>Vencen esta semana (incluye atrasadas)</label>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="estancadas" ${f.estancadas ? 'checked' : ''}>Sin tocar desde hace más de ${ESTANCADA_DIAS} días</label>
     </section>`;
@@ -774,7 +834,7 @@ function vistaMenu() {
 function imprimir(titulo, notas) {
   const filas = notas.map(n => `<tr><td>${PRIO_N[n.prioridad]}</td><td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}</td>
     <td>${(n.etiquetas || []).map(id => '#' + esc((etq(id) || {}).nombre || '')).join(' ')}</td><td>${esc((per(n.persona_id) || {}).nombre || '')}</td>
-    <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite)) : ''}${n.alarma ? '<br>Alarma ' + esc(fechaCorta(n.alarma) + ' ' + hora(n.alarma)) : ''}</td></tr>`).join('');
+    <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : '')) : ''}${textoAviso(n) ? '<br>Aviso ' + esc(textoAviso(n)) : ''}</td></tr>`).join('');
   $('#print').innerHTML = `<h1>${esc(titulo)}</h1><p>${notas.length} notas · ${esc(new Date().toLocaleString('es-ES'))}</p>
     <table><thead><tr><th>Prioridad</th><th>Nota</th><th>Etiquetas</th><th>Asignada a</th><th>Estado y fechas</th></tr></thead><tbody>${filas}</tbody></table>`;
   setTimeout(() => window.print(), 50);
@@ -801,7 +861,7 @@ function vistaDictado() {
       <div class="meter" id="meter">${'<span></span>'.repeat(32)}</div>
       <button class="rec-btn" data-act="rec-pausa" aria-label="${D.fase === 'grabando' ? 'Pausar' : 'Continuar'}">${D.fase === 'grabando' ? '<span class="stop" style="width:10px;margin-right:8px"></span><span class="stop" style="width:10px"></span>' : ICON.mic}</button>
     </div>
-    <p class="hint">Habla con naturalidad. Si mencionas varios asuntos, se separarán en notas distintas con su prioridad, etiquetas, persona, fecha y alarma.</p>`;
+    <p class="hint">Habla con naturalidad. Si mencionas varios asuntos, se separarán en notas distintas con su prioridad, etiquetas, persona, fecha, hora y avisos.</p>`;
     pie = `<button class="btn" data-act="rec-cancelar">Descartar</button><button class="btn primary" data-act="rec-parar">Terminar y analizar</button>`;
   } else if (D.fase === 'procesando') {
     cuerpo = `<div class="card rec"><div class="spinner" role="status" aria-label="Procesando"></div><div class="state">${esc(D.msg)}</div></div>
@@ -924,7 +984,7 @@ function propuestaDe(n, a) {
     evidencias: n.evidencias || [],
     nuevas: (n.etiquetas_nuevas || []).map(x => ({ ...x, decision: '' })),
     persona_id: (S.personas.find(p => norm(p.nombre) === norm(n.persona)) || {}).id || '',
-    fecha_limite: n.fecha_limite || '', alarma: n.alarma || '', duracion: n.duracion || 0,
+    fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '', aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 0, duracion: n.duracion || 0,
   };
 }
 
@@ -957,10 +1017,13 @@ function tarjetaPropuesta(p, i) {
       ${n.similar ? `<button class="btn small" data-act="p-nueva" data-p="${i}" data-n="${esc(n.nombre)}" data-v="usar">Usar #${esc(n.similar)}</button>` : ''}
       <button class="btn small link" data-act="p-nueva" data-p="${i}" data-n="${esc(n.nombre)}" data-v="descartar">Descartar</button></div></div>`).join('')}
     <div class="grid2">
-      <label class="field"><small>Asignar a</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">Nadie</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
       <label class="field"><small>Fecha límite</small><input class="input" type="date" data-p="${i}" data-f="fecha_limite" value="${esc(p.fecha_limite)}"></label>
+      <label class="field"><small>Hora</small><input class="input" type="time" data-p="${i}" data-f="hora_limite" value="${esc(p.hora_limite)}"></label>
     </div>
-    <label class="field"><small>Alarma</small><input class="input" type="datetime-local" data-p="${i}" data-f="alarma" value="${esc(p.alarma)}"></label>
+    <div class="grid2">
+      <label class="field"><small>Asignar a</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">Nadie</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
+      <label class="field"><small>Aviso previo</small><select class="input" data-p="${i}" data-f="aviso"><option value="">Ninguno</option>${Object.keys(AVISO_RANGO).map(u => `<optgroup label="${AVISO_N[u][1][0].toUpperCase() + AVISO_N[u][1].slice(1)}">${Array.from({ length: AVISO_RANGO[u] }, (_, j) => j + 1).map(c => `<option value="${u}:${c}" ${p.aviso_unidad === u && p.aviso_cant === c ? 'selected' : ''}>${textoAntelacion(u, c)}</option>`).join('')}</optgroup>`).join('')}</select></label>
+    </div>
   </article>`;
 }
 async function guardarDictado() {
@@ -975,7 +1038,7 @@ async function guardarDictado() {
     }
     crearNotaLocal({
       titulo: p.titulo.trim() || 'Nota dictada', cuerpo: p.cuerpo.trim(), prioridad: p.prioridad, etiquetas: [...new Set(ids)],
-      persona_id: p.persona_id || null, fecha_limite: p.fecha_limite || null, alarma: localAIso(p.alarma), duracion: p.duracion || null,
+      persona_id: p.persona_id || null, ...camposFecha(p), duracion: p.duracion || null,
       origen: 'voz', origen_ref: p.audio, transcripcion: p.transcripcion,
     });
     audios.add(p.audio); n++;
@@ -1088,8 +1151,8 @@ function vistaConflicto() {
   const c = S.conflictos[0];
   if (!c) return pagina('Conflictos', '<p>No hay conflictos pendientes.</p>', `<button class="btn primary" data-act="cerrar">Cerrar</button>`);
   const mia = nota(c.op.ref) || {}, srv = c.servidor;
-  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['alarma', 'Alarma'], ['estado', 'Estado'], ['persona_id', 'Asignada a']];
-  const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'alarma' ? (n[k] ? fechaCorta(n[k]) + ' ' + hora(n[k]) : '—') : k === 'persona_id' ? ((per(n[k]) || {}).nombre || '—') : (n[k] || '—');
+  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['estado', 'Estado'], ['persona_id', 'Asignada a']];
+  const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'aviso_unidad' ? (textoAviso(n) || '—') : k === 'persona_id' ? ((per(n[k]) || {}).nombre || '—') : (n[k] || '—');
   const col = (n, t) => `<div><b>${t}</b>${campos.map(([k, l]) => `<span class="${String(mia[k] || '') !== String(srv[k] || '') ? 'changed' : ''}"><small class="hint">${l}:</small> ${esc(val(n, k))}</span>`).join('')}</div>`;
   const cuerpo = `<p>Esta nota se cambió en otro dispositivo mientras la editabas aquí. Elige qué versión quieres conservar. Lo marcado en naranja es lo que difiere.</p>
     <div class="diff">${col(mia, 'Tu versión (este dispositivo)')}${col(srv, 'Versión guardada (otro dispositivo)')}</div>`;
@@ -1124,10 +1187,10 @@ function vistaAjustes() {
     <p id="cfg-res" class="hint"></p>
   </section>
 
-  <section class="card"><h2>Avisos de alarmas</h2>
+  <section class="card"><h2>Avisos</h2>
     ${!pushOk ? '<p class="hint">Este navegador no admite avisos. En iPhone, instala primero la app en la pantalla de inicio (Compartir → Añadir a pantalla de inicio) y ábrela desde allí.</p>'
       : perm === 'denied' ? '<p class="hint">Los avisos están bloqueados para esta app. Actívalos en los ajustes del navegador (icono del candado junto a la dirección) y vuelve aquí.</p>'
-      : `<p class="hint">${c.pushEndpoint && perm === 'granted' ? 'Este dispositivo recibe los avisos.' : 'Activa los avisos para que las alarmas suenen en este dispositivo aunque la app esté cerrada.'}</p>
+      : `<p class="hint">${c.pushEndpoint && perm === 'granted' ? 'Este dispositivo recibe los avisos.' : 'Activa los avisos para que suenen en este dispositivo aunque la app esté cerrada.'}</p>
          <div class="row"><button class="btn ${c.pushEndpoint && perm === 'granted' ? '' : 'primary'}" data-act="push-activar">${c.pushEndpoint && perm === 'granted' ? 'Volver a registrar' : 'Activar avisos aquí'}</button><button class="btn" data-act="push-probar">Enviar aviso de prueba</button></div>`}
     <div id="dispositivos" class="list-plain"></div>
   </section>
@@ -1241,14 +1304,15 @@ function modalGrupo() {
   return pagina(v ? 'Editar grupo filtrado' : 'Guardar como grupo', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="mg-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
 }
 
-// ---------- Alarmas con la app abierta ----------
+// ---------- Avisos con la app abierta ----------
 function comprobarAlarmas() {
   const ahora = Date.now();
   for (const n of activas()) {
-    if (!n.alarma || S.alarmasVistas.has(n.id)) continue;
+    const clave = n.id + '|' + n.alarma;   // una nota puede tener dos avisos (antes y a la hora límite)
+    if (!n.alarma || S.alarmasVistas.has(clave)) continue;
     const t = Date.parse(n.alarma);
     if (t <= ahora && ahora - t < 15 * 60000) {
-      S.alarmasVistas.add(n.id);
+      S.alarmasVistas.add(clave);
       if (document.visibilityState !== 'visible') continue;
       toast('🔔 ' + n.titulo, {
         clase: 'alarm', ms: 0, botones: [
@@ -1257,13 +1321,15 @@ function comprobarAlarmas() {
           ['Cerrar', () => {}],
         ],
       });
-    } else if (t < ahora) S.alarmasVistas.add(n.id);
+    } else if (t < ahora) S.alarmasVistas.add(clave);
+    // Tras sonar, el siguiente aviso de la nota (el de la hora límite) queda programado también aquí.
+    if (t <= ahora) { const sig = proximoAviso(n, t); if (sig) n.alarma = sig; }
   }
 }
 function accionAlarmaLocal(id, accion) {
   const n = nota(id); if (!n) return;
   if (accion === 'hecha') { n.estado = 'realizada'; n.realizada_en = new Date().toISOString(); }
-  else { n.alarma = new Date(Date.now() + 10 * 60000).toISOString(); S.alarmasVistas.delete(id); }
+  else n.alarma = new Date(Date.now() + 10 * 60000).toISOString();
   encolar({ kind: 'alarma', ref: id, method: 'POST', path: '/notas/' + id + '/alarma', body: { accion, minutos: 10, endpoint: S.cfg.pushEndpoint || '' } });
   renderBase();
   toast(accion === 'hecha' ? 'Nota realizada' : 'Te lo recuerdo en 10 minutos');
@@ -1306,6 +1372,7 @@ const ACT = {
 
   // Editor
   'ed-prio': (el) => { S.ed.d.prioridad = el.dataset.v; renderOverlay(); },
+  'ed-aviso': (el) => { const d = S.ed.d; d.aviso_unidad = el.dataset.v; if (d.aviso_unidad) d.aviso_cant = Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[d.aviso_unidad]); pintarAvisos(); },
   'ed-quitar-tag': (el) => { S.ed.d.etiquetas = S.ed.d.etiquetas.filter(x => x !== el.dataset.id); renderOverlay(); },
   'ed-hash': () => {
     const ta = $('#ed-cuerpo');
@@ -1323,6 +1390,12 @@ const ACT = {
 
   // Dictado
   'rec-empezar': () => empezarGrabacion(),
+  // Botón Dictar: abre el dictado y empieza a grabar sin tener que pulsar otra vez.
+  dictar: () => {
+    const D = dic();
+    if (ruta() !== 'dictado') location.hash = '#/dictado';
+    if (!['grabando', 'pausa', 'procesando'].includes(D.fase)) empezarGrabacion();
+  },
   'rec-pausa': () => {
     const D = dic(); if (!D.rec) return;
     if (D.fase === 'grabando') { D.rec.pause(); D.fase = 'pausa'; } else { D.rec.resume(); D.fase = 'grabando'; }
@@ -1511,11 +1584,13 @@ document.addEventListener('input', ev => {
   if (t.dataset.ed && S.ed) {
     S.ed.d[t.dataset.ed] = t.type === 'checkbox' ? t.checked : t.value;
     if (t.dataset.ed === 'cuerpo') onCuerpo(t);
+    if (['fecha_limite', 'hora_limite', 'aviso_cant'].includes(t.dataset.ed)) pintarAvisos();
     return;
   }
   if (t.dataset.p != null && S.dic) {
     const p = S.dic.propuestas[t.dataset.p], f = t.dataset.f;
     if (f === 'incluir') { p.incluir = t.checked; renderOverlay(); return; }
+    if (f === 'aviso') { const [u, c] = t.value.split(':'); p.aviso_unidad = u || ''; p.aviso_cant = Number(c) || 0; return; }
     if (f === 'add-tag') { if (t.value) { p.etiquetas.push(t.value); renderOverlay(); } return; }
     p[f] = t.value;
     if (f === 'prioridad') renderOverlay();

@@ -26,7 +26,7 @@ Cron `* * * * *`: alarmas vencidas → push; cada 15 min sube a Crítica lo que 
 `GET /estado`, `GET /datos`, `POST /notas` (idempotente por id), `PUT /notas/:id` (con `base_version`; 409 `{conflicto, servidor}` si no coincide; `forzar: true` para imponerla), `DELETE /notas/:id` (solo papelera), `POST /notas/:id/alarma` (`hecha` | `posponer`), `POST /notas/conservar`, `POST /papelera/vaciar`, `/etiquetas` (409 si nombre duplicado sin distinguir mayúsculas ni acentos; `cerrada: true` en una obra archiva un informe), `/personas`, `/vistas`, `PUT /vistas-orden`, `PUT /config` (claves en `CONFIG_PUBLICA`), `POST /transcribir` (audio binario), `POST /analizar` (tool `guardar_notas`), `/push/clave`, `/push/suscribir`, `/dispositivos`, `/push/prueba`, `/archivos`, `/exportar`.
 Web Push implementado a mano (VAPID ES256 generada y guardada en `config`, cifrado aes128gcm). Los mensajes `cerrar` no se envían a `push.apple.com` (Safari retira el permiso si no se muestra notificación).
 
-Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `borrar_en`, `aviso30/7`), `etiquetas` (`tipo`: obra, industrial, accion, responsable, otra; `alias`; `cerrada`), `nota_etiquetas`, `personas`, `vistas` (grupos filtrados, `filtro` JSON), `cambios` (90 días), `suscripciones`, `config`, `archivos` (informes HTML).
+Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite` 'HH:MM', `aviso_unidad` h/d/s y `aviso_cant`, `alarma` = próximo aviso pendiente calculado por el worker, `borrar_en`, `aviso30/7`), `etiquetas` (`tipo`: obra, industrial, accion, responsable, otra; `alias`; `cerrada`), `nota_etiquetas`, `personas`, `vistas` (grupos filtrados, `filtro` JSON), `cambios` (90 días), `suscripciones`, `config`, `archivos` (informes HTML).
 **Cambios de esquema**: solo añadir columnas o tablas, nunca borrar. Para columnas nuevas usa `ALTER TABLE ... ADD COLUMN` protegido (comprobar con `PRAGMA table_info`), porque la base de producción ya tiene datos.
 
 ### App (`app/app.js`)
@@ -40,7 +40,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `borrar_en`,
 ## Diseño (paleta Voracys, igual que sus otras apps)
 - Colores: brand `#60A4F4`, primario `#1F5FAE`, tinta `#16324F`, secundario `#52627A`, línea `#D6E2F0`, fondo `#F4F8FD`, tinte `#EAF3FE`, naranja `#FF7B0F` (texto `#8A3D00`, tinte `#FFF1E4`), rojo `#C62828`. Modo oscuro con los tokens de `app.css`.
 - Fuentes Barlow (texto) y Barlow Condensed (títulos), alojadas en `app/fonts/`.
-- Prioridades: **Crítica** rojo, **Alta** naranja, **Normal** azul, **Baja** gris. Siempre con su nombre escrito además del color.
+- Prioridades: **Urgente** rojo (valor interno `critica`, no cambiarlo), **Alta** naranja, **Normal** azul, **Baja** gris. Siempre con su nombre escrito además del color.
 - Botón **Dictar** naranja y **Nueva nota** azul. Vista compacta: en móvil la descripción ocupa una línea con «…»; en ordenador cada nota es una fila.
 - Corte móvil / ordenador en 900 px. En ordenador, barra lateral con grupos filtrados.
 - Usa las clases y tokens existentes de `app.css` antes de crear estilos nuevos. Textos de la interfaz en castellano, frases cortas.
@@ -50,6 +50,8 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `borrar_en`,
 - Etiquetas: se escriben con `#` en el cuerpo, salen sugerencias y se convierten en chip guardado aparte (renombrar cambia en todas). Sin espacios. Alias para el dictado.
 - Dictado: varias notas por audio; Claude solo usa etiquetas y personas existentes, propone nuevas (en naranja: Crear / Usar similar / Descartar); siempre hay pantalla de revisión. Audios guardados 7 días en el dispositivo y reintentables.
 - Realizadas: un año; las de obras abiertas no se borran nunca; al cerrar una obra se archiva informe y las caducadas tienen 30 días; antes de borrar se archiva informe. Papelera 30 días.
+- Avisos (antes «alarmas»): la fecha límite puede llevar hora; con hora se avisa siempre en ese momento. Aviso previo opcional: 1-12 horas, 1-7 días o 1-4 semanas antes; sin hora límite suena a las 8:00. Las alarmas antiguas se pasaron a hora límite (`migrarAlarmas`).
+- El botón Dictar empieza a grabar al pulsarlo (sin segundo toque).
 - Deshacer (≈8 s) al marcar realizada, eliminar y (fase 2) arrastrar.
 - Conflictos multi-dispositivo por versión, con pantalla para elegir.
 - Revisión semanal guiada (día configurable, viernes por defecto).

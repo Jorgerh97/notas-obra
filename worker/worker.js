@@ -23,8 +23,11 @@
 //   GET    /archivos, GET|DELETE /archivos/:id   Informes archivados antes de borrar notas.
 //   GET    /exportar                  Copia completa de los datos en JSON.
 //
-// Tarea programada (Cron Trigger "* * * * *"): envía las alarmas, sube a Crítica las notas que
-// vencen en menos de 24 h y, una vez al día, limpia la papelera y archiva y borra las realizadas caducadas.
+// Avisos: si la nota tiene hora límite, se avisa en ese momento; además puede tener un aviso con
+// antelación (1-12 horas, 1-7 días o 1-4 semanas). La columna "alarma" guarda el próximo aviso pendiente.
+//
+// Tarea programada (Cron Trigger "* * * * *"): envía los avisos, sube a Urgente (valor interno "critica")
+// las notas que vencen en menos de 24 h y, una vez al día, limpia la papelera y archiva y borra las realizadas caducadas.
 //
 // Variables del worker:
 //   ANTHROPIC_API_KEY (Secret), APP_TOKEN (Secret), ALLOWED_ORIGIN (Text), MODEL (Text, opcional)
@@ -44,6 +47,8 @@ const ESTADOS = ['activa', 'realizada', 'papelera'];
 const TIPOS_ETIQUETA = ['obra', 'industrial', 'accion', 'responsable', 'otra'];
 const CONFIG_PUBLICA = ['revision_dia', 'revision_ultima'];
 const USUARIO = 'yo';   // fase 1: un solo usuario. Preparado para varios.
+const AVISO_RANGO = { h: 12, d: 7, s: 4 };   // horas, días o semanas antes (desde 1)
+const HORA_AVISO = '08:00';                  // hora de los avisos cuando la fecha límite no tiene hora
 
 // ---------- Utilidades ----------
 class HttpError extends Error { constructor(status, message, extra) { super(message); this.status = status; this.extra = extra; } }
@@ -56,6 +61,42 @@ const isId = v => typeof v === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(v);
 const fechaOk = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 const isoOk = v => typeof v === 'string' && !isNaN(Date.parse(v)) && /^\d{4}-\d{2}-\d{2}T/.test(v);
 const nombreEtiquetaOk = v => typeof v === 'string' && /^[\p{L}\p{N}_-]{1,40}$/u.test(v);
+const horaOk = v => typeof v === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(v);
+const avisoOk = (unidad, cant) => unidad in AVISO_RANGO && Number.isInteger(cant) && cant >= 1 && cant <= AVISO_RANGO[unidad];
+
+// ---------- Hora de Madrid ----------
+function partesMadrid(ms) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Madrid', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+  return { fecha: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` };
+}
+// "AAAA-MM-DD" + "HH:MM" en hora de Madrid → milisegundos UTC.
+function madridAUtc(fecha, hora) {
+  const [y, m, d] = fecha.split('-').map(Number), [h, mi] = hora.split(':').map(Number);
+  const local = Date.UTC(y, m - 1, d, h, mi);
+  const desfase = t => { const p = partesMadrid(t); return Date.parse(p.fecha + 'T' + p.hora + ':00Z') - Math.floor(t / 60000) * 60000; };
+  const t = local - desfase(local);
+  return local - desfase(t);
+}
+const sumarDias = (fecha, n) => new Date(Date.parse(fecha + 'T00:00:00Z') + n * DIA).toISOString().slice(0, 10);
+
+// Momentos en que hay que avisar de una nota (ms UTC).
+function momentosAviso(n) {
+  if (!n.fecha_limite) return [];
+  const out = [];
+  const hora = n.hora_limite || HORA_AVISO;
+  if (n.hora_limite) out.push(madridAUtc(n.fecha_limite, n.hora_limite));
+  if (avisoOk(n.aviso_unidad, n.aviso_cant)) {
+    out.push(n.aviso_unidad === 'h'
+      ? madridAUtc(n.fecha_limite, hora) - n.aviso_cant * 3600000
+      : madridAUtc(sumarDias(n.fecha_limite, -n.aviso_cant * (n.aviso_unidad === 's' ? 7 : 1)), hora));
+  }
+  return out;
+}
+function proximoAviso(n, despues) {
+  const t = momentosAviso(n).filter(x => x > despues).sort((a, b) => a - b)[0];
+  return t ? new Date(t).toISOString() : null;
+}
 
 async function readJson(request) {
   try { return await request.json(); } catch { throw new HttpError(400, 'El cuerpo de la petición no es JSON válido.'); }
@@ -87,11 +128,36 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS config (clave TEXT PRIMARY KEY, valor TEXT)`,
   `CREATE TABLE IF NOT EXISTS archivos (id TEXT PRIMARY KEY, titulo TEXT, motivo TEXT, creado TEXT, notas INTEGER, html TEXT)`,
 ];
+// Columnas añadidas después de la primera versión (la base de producción ya tiene datos).
+const COLUMNAS_NUEVAS = [['notas', 'hora_limite', 'TEXT'], ['notas', 'aviso_cant', 'INTEGER'], ['notas', 'aviso_unidad', 'TEXT']];
 let schemaOk = false;
 async function ensureSchema(env) {
   if (schemaOk) return;
   await env.DB.batch(SCHEMA.map(q => env.DB.prepare(q)));
+  const cols = new Set((await all(env, 'PRAGMA table_info(notas)')).map(c => c.name));
+  if (!cols.has('hora_limite')) {
+    for (const [tabla, col, tipo] of COLUMNAS_NUEVAS) {
+      if (!cols.has(col)) { try { await run(env, `ALTER TABLE ${tabla} ADD COLUMN ${col} ${tipo}`); } catch { /* otra instancia la añadió a la vez */ } }
+    }
+    await migrarAlarmas(env);
+  }
   schemaOk = true;
+}
+
+// Las alarmas de la versión anterior pasan a ser la hora de la fecha límite. Si la alarma caía otro día
+// que la fecha límite, se convierte en un aviso con antelación cuando cabe en las opciones (1-7 días, 1-4 semanas).
+// La columna alarma no se toca: el aviso pendiente sigue sonando a la misma hora.
+async function migrarAlarmas(env) {
+  const notas = await all(env, 'SELECT id, fecha_limite, alarma FROM notas WHERE alarma IS NOT NULL AND hora_limite IS NULL');
+  for (const n of notas) {
+    const { fecha, hora } = partesMadrid(Date.parse(n.alarma));
+    const limite = n.fecha_limite || fecha;
+    const dias = Math.round((Date.parse(limite) - Date.parse(fecha)) / DIA);
+    let unidad = null, cant = null;
+    if (dias > 0 && dias % 7 === 0 && dias / 7 <= AVISO_RANGO.s) { unidad = 's'; cant = dias / 7; }
+    else if (dias > 0 && dias <= AVISO_RANGO.d) { unidad = 'd'; cant = dias; }
+    await run(env, 'UPDATE notas SET fecha_limite = ?, hora_limite = ?, aviso_unidad = ?, aviso_cant = ? WHERE id = ?', limite, hora, unidad, cant, n.id);
+  }
 }
 const all = async (env, sql, ...b) => (await env.DB.prepare(sql).bind(...b).all()).results || [];
 const first = (env, sql, ...b) => env.DB.prepare(sql).bind(...b).first();
@@ -105,7 +171,7 @@ const setCfg = (env, clave, valor) =>
   run(env, 'INSERT INTO config (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor', clave, String(valor));
 
 // ---------- Notas ----------
-const NOTA_COLS = 'id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version';
+const NOTA_COLS = 'id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version';
 
 async function etiquetasDe(env, ids) {
   const mapa = {};
@@ -136,6 +202,14 @@ async function limpiarCampos(env, b, parcial) {
   }
   if ('persona_id' in b) c.persona_id = isId(b.persona_id) ? b.persona_id : null;
   if ('fecha_limite' in b) c.fecha_limite = fechaOk(b.fecha_limite) ? b.fecha_limite : null;
+  if ('hora_limite' in b) c.hora_limite = horaOk(b.hora_limite) ? b.hora_limite : null;
+  if ('aviso_unidad' in b || 'aviso_cant' in b) {
+    const ok = avisoOk(b.aviso_unidad, b.aviso_cant);
+    c.aviso_unidad = ok ? b.aviso_unidad : null;
+    c.aviso_cant = ok ? b.aviso_cant : null;
+  }
+  if ('fecha_limite' in c && !c.fecha_limite) { c.hora_limite = null; c.aviso_unidad = null; c.aviso_cant = null; }
+  // "alarma" solo llega de la versión anterior de la app; la nueva envía la fecha, la hora y el aviso.
   if ('alarma' in b) c.alarma = isoOk(b.alarma) ? new Date(b.alarma).toISOString() : null;
   if ('subir_critica' in b) c.subir_critica = b.subir_critica ? 1 : 0;
   if ('duracion' in b) c.duracion = Number.isInteger(b.duracion) && b.duracion > 0 && b.duracion <= 1440 ? b.duracion : null;
@@ -144,6 +218,15 @@ async function limpiarCampos(env, b, parcial) {
     c.estado = b.estado;
   }
   return c;
+}
+
+// Recalcula el próximo aviso cuando cambian la fecha límite, su hora o la antelación.
+const CAMPOS_AVISO = ['fecha_limite', 'hora_limite', 'aviso_cant', 'aviso_unidad'];
+function reprogramar(c, antes) {
+  if ('alarma' in c) return;
+  if (!CAMPOS_AVISO.some(k => k in c && (!antes || (c[k] ?? null) !== (antes[k] ?? null)))) return;
+  c.alarma = proximoAviso({ ...(antes || {}), ...c }, Date.now());
+  c.alarma_enviada = 0;
 }
 
 async function ponerEtiquetas(env, notaId, ids) {
@@ -171,10 +254,12 @@ async function crearNota(env, b, dispositivo) {
   const c = await limpiarCampos(env, b, false);
   c.estado = c.estado || 'activa';
   efectosEstado(c, null);
+  reprogramar(c, null);
   const t = now();
   const fila = {
     id, usuario_id: USUARIO, titulo: c.titulo, cuerpo: c.cuerpo || '', prioridad: c.prioridad, estado: c.estado,
-    persona_id: c.persona_id || null, fecha_limite: c.fecha_limite || null, alarma: c.alarma || null, alarma_enviada: 0,
+    persona_id: c.persona_id || null, fecha_limite: c.fecha_limite || null, hora_limite: c.hora_limite || null,
+    aviso_cant: c.aviso_cant || null, aviso_unidad: c.aviso_unidad || null, alarma: c.alarma || null, alarma_enviada: 0,
     subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null,
     origen: ['manual', 'voz', 'app'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
     transcripcion: b.transcripcion ? txt(b.transcripcion, 20000) : null,
@@ -196,7 +281,9 @@ async function editarNota(env, ctx, id, b, dispositivo) {
   }
   const c = await limpiarCampos(env, b, true);
   efectosEstado(c, antes);
-  if ('alarma' in c && c.alarma !== antes.alarma) c.alarma_enviada = 0;
+  reprogramar(c, antes);
+  if ('alarma' in c && c.alarma === antes.alarma) { delete c.alarma; delete c.alarma_enviada; }
+  else if ('alarma' in c) c.alarma_enviada = 0;
   const t = now();
   c.actualizada = t;
   const cols = Object.keys(c);
@@ -306,7 +393,7 @@ async function leerDatos(env) {
 
 // ---------- Informes archivados ----------
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const PRIO_NOMBRE = { critica: 'Crítica', alta: 'Alta', normal: 'Normal', baja: 'Baja' };
+const PRIO_NOMBRE = { critica: 'Urgente', alta: 'Alta', normal: 'Normal', baja: 'Baja' };
 const fechaEs = iso => iso ? new Date(iso).toLocaleString('es-ES', { timeZone: 'Europe/Madrid', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 const diaEs = d => d ? d.split('-').reverse().join('/') : '';
 
@@ -320,7 +407,7 @@ function informeHtml(titulo, notas, etiquetas, personas) {
       <td>${(n.etiquetas || []).map(id => '#' + esc(eMap[id] || '')).join(' ')}</td>
       <td>${esc(pMap[n.persona_id] || '')}</td>
       <td>${esc(n.estado === 'realizada' ? 'Realizada ' + fechaEs(n.realizada_en) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente')}
-        ${n.fecha_limite ? '<br>Límite ' + esc(diaEs(n.fecha_limite)) : ''}<br>Creada ${esc(fechaEs(n.creada))}</td>
+        ${n.fecha_limite ? '<br>Límite ' + esc(diaEs(n.fecha_limite)) + (n.hora_limite ? ' ' + esc(n.hora_limite) : '') : ''}<br>Creada ${esc(fechaEs(n.creada))}</td>
     </tr>`).join('');
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${esc(titulo)}</title>
 <style>body{font-family:Barlow,Arial,sans-serif;color:#16324F;margin:24px}h1{font-size:22px;margin:0 0 4px}p{color:#52627A;margin:0 0 16px}
@@ -353,12 +440,13 @@ Reglas:
 - Si el dictado menciona varios asuntos independientes, crea una nota por asunto. Si es un solo asunto, una sola nota.
 - titulo: corto (máximo 8 palabras), empezando por un verbo cuando sea una acción ("Llamar al fontanero", "Revisar línea de vida").
 - cuerpo: los detalles útiles en una o dos frases, en castellano correcto. Corrige errores evidentes de transcripción usando el contexto de obra. No inventes nada.
-- prioridad: critica (riesgo de seguridad, paralización, hormigonados o plazos de hoy o mañana), alta (importante con plazo cercano), normal (por defecto), baja (cuando se diga que no corre prisa). Si se dice explícitamente la urgencia, respétala.
+- prioridad: critica (en la app se llama "Urgente": riesgo de seguridad, paralización, hormigonados o plazos de hoy o mañana), alta (importante con plazo cercano), normal (por defecto), baja (cuando se diga que no corre prisa). Si se dice explícitamente la urgencia, respétala ("urgente" o "crítico" es critica).
 - etiquetas: elige SOLO de la lista de etiquetas existentes. Usa sus alias para reconocerlas cuando se mencionen de otra forma ("la de Mallorca", "los carpinteros"). En evidencias indica las palabras que has oído y la etiqueta asociada.
 - etiquetas_nuevas: solo si se menciona claramente una obra, industrial o asunto que no está en la lista y sería útil etiquetarlo. Nombre sin espacios (por ejemplo "Fontaneria" o "Nave_Sabadell"). En similar pon la etiqueta existente más parecida, o vacío si no hay ninguna.
 - persona: solo de la lista de personas existentes, cuando se diga que la nota es para alguien o que alguien tiene que hacerla. Si no, vacío.
-- fecha_limite (AAAA-MM-DD): cuando se diga para cuándo hay que hacerlo. Calcula las fechas relativas ("el jueves", "la semana que viene") a partir de la fecha actual que se indica.
-- alarma (AAAA-MM-DDTHH:MM, hora local): solo cuando se pida un aviso o se diga una hora concreta. Si se dice una hora sin día y esa hora ya ha pasado hoy, es mañana.
+- fecha_limite (AAAA-MM-DD): cuando se diga para cuándo hay que hacerlo, o el día en que se pide un aviso o recordatorio. Calcula las fechas relativas ("el jueves", "la semana que viene") a partir de la fecha actual que se indica.
+- hora_limite (HH:MM, 24 h, hora local): solo si se dice una hora concreta ("a las 10", "a las 4 de la tarde" → 16:00). Si se dice una hora sin día, la fecha límite es hoy, o mañana si esa hora ya ha pasado. A la hora límite la app avisa siempre; no hace falta pedirlo.
+- aviso_unidad (h, d o s) y aviso_cant: solo si se pide que avise con antelación ("avísame un día antes" → d y 1; "dos horas antes" → h y 2; "una semana antes" → s y 1). Horas de 1 a 12, días de 1 a 7, semanas de 1 a 4. Si no se pide, unidad vacía y 0.
 - duracion (minutos): solo si se dice cuánto va a durar ("reunión de una hora"). Si no, 0.
 - Deja vacíos los campos que no se mencionen.`;
 
@@ -381,7 +469,9 @@ const TOOL = {
             etiquetas_nuevas: { type: 'array', items: { type: 'object', properties: { nombre: { type: 'string' }, similar: { type: 'string' }, oido: { type: 'string' } }, required: ['nombre'] } },
             persona: { type: 'string' },
             fecha_limite: { type: 'string' },
-            alarma: { type: 'string' },
+            hora_limite: { type: 'string' },
+            aviso_unidad: { type: 'string', enum: ['', 'h', 'd', 's'] },
+            aviso_cant: { type: 'integer' },
             duracion: { type: 'integer' },
           },
           required: ['titulo', 'cuerpo', 'prioridad', 'etiquetas'],
@@ -449,7 +539,9 @@ async function analizar(env, b) {
       etiquetas_nuevas: nuevas.slice(0, 5),
       persona: perNorm[norm(n.persona)] || '',
       fecha_limite: fechaOk(n.fecha_limite) ? n.fecha_limite : '',
-      alarma: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(n.alarma || '') ? n.alarma : '',
+      hora_limite: fechaOk(n.fecha_limite) && horaOk(n.hora_limite) ? n.hora_limite : '',
+      aviso_unidad: fechaOk(n.fecha_limite) && avisoOk(n.aviso_unidad, n.aviso_cant) ? n.aviso_unidad : '',
+      aviso_cant: fechaOk(n.fecha_limite) && avisoOk(n.aviso_unidad, n.aviso_cant) ? n.aviso_cant : 0,
       duracion: Number.isInteger(n.duracion) && n.duracion > 0 ? Math.min(n.duracion, 1440) : 0,
     };
   });
@@ -555,12 +647,17 @@ async function cerrarAvisos(env, notaId, excepto) {
 
 // ---------- Tareas programadas ----------
 async function enviarAlarmas(env) {
-  const vencidas = await all(env, `SELECT id, titulo, cuerpo, prioridad FROM notas WHERE estado = 'activa' AND alarma_enviada = 0
-    AND alarma IS NOT NULL AND alarma <= ? ORDER BY alarma LIMIT 40`, now());
+  const vencidas = await all(env, `SELECT id, titulo, cuerpo, prioridad, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma FROM notas
+    WHERE estado = 'activa' AND alarma_enviada = 0 AND alarma IS NOT NULL AND alarma <= ? ORDER BY alarma LIMIT 40`, now());
   for (const n of vencidas) {
-    await run(env, 'UPDATE notas SET alarma_enviada = 1 WHERE id = ?', n.id);
+    // Tras el aviso con antelación queda pendiente el de la hora límite.
+    const siguiente = proximoAviso(n, Date.parse(n.alarma));
+    if (siguiente) await run(env, 'UPDATE notas SET alarma = ?, alarma_enviada = 0 WHERE id = ?', siguiente, n.id);
+    else await run(env, 'UPDATE notas SET alarma_enviada = 1 WHERE id = ?', n.id);
     const titulo = (n.prioridad === 'critica' ? '⚠ ' : '') + n.titulo;
-    await avisarTodos(env, { tipo: 'alarma', nota_id: n.id, titulo, cuerpo: (n.cuerpo || '').slice(0, 180), tag: 'nota-' + n.id });
+    const limite = n.fecha_limite ? 'Fecha límite: ' + diaEs(n.fecha_limite) + (n.hora_limite ? ' a las ' + n.hora_limite : '') : '';
+    const cuerpo = [limite, n.cuerpo || ''].filter(Boolean).join(' · ').slice(0, 180);
+    await avisarTodos(env, { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
   }
 }
 
@@ -765,7 +862,7 @@ export default {
         const b = await readJson(request).catch(() => ({}));
         const subs = b && b.id ? await all(env, 'SELECT * FROM suscripciones WHERE id = ?', b.id) : await all(env, 'SELECT * FROM suscripciones WHERE activo = 1');
         let ok = 0;
-        for (const s of subs) if (await enviarPush(env, s, { tipo: 'info', tag: 'prueba', titulo: 'Aviso de prueba', cuerpo: 'Las alarmas de tus notas llegarán así a ' + (s.nombre || 'este dispositivo') + '.' })) ok++;
+        for (const s of subs) if (await enviarPush(env, s, { tipo: 'info', tag: 'prueba', titulo: 'Aviso de prueba', cuerpo: 'Los avisos de tus notas llegarán así a ' + (s.nombre || 'este dispositivo') + '.' })) ok++;
         return json({ ok: true, enviados: ok, total: subs.length });
       }
 

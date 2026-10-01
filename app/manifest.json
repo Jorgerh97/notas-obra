@@ -1,7 +1,7 @@
 {
   "name": "Notas de obra",
   "short_name": "Notas",
-  "description": "Notas, tareas y alarmas de obra, escritas o dictadas.",
+  "description": "Notas, tareas y avisos de obra, escritas o dictadas.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

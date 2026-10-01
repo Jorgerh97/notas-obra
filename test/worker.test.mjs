@@ -21,8 +21,8 @@ const mf = new Miniflare({
     if (url.hostname === 'api.anthropic.com') {
       claudeInput = await req.json();
       return new Response(JSON.stringify({ stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'guardar_notas', input: { notas: [
-        { titulo: 'Confirmar hormigonado', cuerpo: 'Llamar a planta', prioridad: 'critica', etiquetas: ['mallorca245', 'Inventada'], evidencias: [{ oido: 'la de Mallorca', etiqueta: 'Mallorca245' }], persona: 'encargado', fecha_limite: '2026-09-30', alarma: '2026-09-30T07:30' },
-        { titulo: 'Revisar bajantes', cuerpo: 'Con el fontanero', prioridad: 'normal', etiquetas: [], etiquetas_nuevas: [{ nombre: 'Fontanería general', similar: 'Instalaciones', oido: 'fontanero' }], persona: 'Nadie', fecha_limite: 'mañana', alarma: '' },
+        { titulo: 'Confirmar hormigonado', cuerpo: 'Llamar a planta', prioridad: 'critica', etiquetas: ['mallorca245', 'Inventada'], evidencias: [{ oido: 'la de Mallorca', etiqueta: 'Mallorca245' }], persona: 'encargado', fecha_limite: '2026-09-30', hora_limite: '07:30', aviso_unidad: 'h', aviso_cant: 2 },
+        { titulo: 'Revisar bajantes', cuerpo: 'Con el fontanero', prioridad: 'normal', etiquetas: [], etiquetas_nuevas: [{ nombre: 'Fontanería general', similar: 'Instalaciones', oido: 'fontanero' }], persona: 'Nadie', fecha_limite: 'mañana', hora_limite: '25:00', aviso_unidad: 'd', aviso_cant: 9 },
       ] } }] }), { headers: { 'content-type': 'application/json' } });
     }
     if (url.hostname === 'push.example') {
@@ -76,7 +76,8 @@ ok(JSON.stringify(a.etiquetas) === '["Mallorca245"]', 'etiqueta existente normal
 ok(a.etiquetas_nuevas.length === 1 && a.etiquetas_nuevas[0].nombre === 'Inventada', 'etiqueta inventada pasa a propuesta nueva');
 ok(a.persona === 'Encargado' && b.persona === '', 'persona validada');
 ok(b.etiquetas_nuevas[0].nombre === 'Fontanería_general' && b.etiquetas_nuevas[0].similar === 'Instalaciones', 'nueva sin espacios con similar existente');
-ok(b.fecha_limite === '' && a.alarma === '2026-09-30T07:30', 'fechas validadas');
+ok(b.fecha_limite === '' && a.fecha_limite === '2026-09-30' && a.hora_limite === '07:30', 'fechas validadas');
+ok(a.aviso_unidad === 'h' && a.aviso_cant === 2 && b.aviso_unidad === '' && b.hora_limite === '', 'aviso del dictado validado (fuera de rango se descarta)');
 ok(claudeInput.messages[0].content.includes('Mallorca245 (obra; alias: Mallorca)'), 'Claude recibe etiquetas con alias');
 
 // Push: suscripción, alarma y cifrado
@@ -114,8 +115,40 @@ ok(r.d.nota.estado === 'realizada', 'hecha desde el aviso');
 await new Promise(res => setTimeout(res, 300));
 ok(pushes.some(x => JSON.parse(ece.decrypt(x.body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString()).tipo === 'cerrar'), 'se envía cierre del aviso a otros dispositivos');
 
-// Retención: realizadas caducadas y obra abierta
+// Avisos: hora límite y antelación (hora de Madrid)
+const madrid = ms => { const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Madrid', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(ms)).map(x => [x.type, x.value])); return { fecha: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` }; };
+const lim = madrid(Date.now() + 3 * 864e5);   // dentro de 3 días, a esta hora
+r = await call('POST', '/notas', { id: 'nota_aviso', titulo: 'Entregar planos', fecha_limite: lim.fecha, hora_limite: lim.hora, aviso_unidad: 'd', aviso_cant: 1 });
+let esperado = madrid(Date.parse(r.d.nota.alarma));
+ok(r.d.nota.hora_limite === lim.hora && r.d.nota.aviso_unidad === 'd' && r.d.nota.aviso_cant === 1, 'nota con hora límite y aviso guardada');
+ok(esperado.hora === lim.hora && Math.round((Date.parse(lim.fecha) - Date.parse(esperado.fecha)) / 864e5) === 1, 'próximo aviso: 1 día antes a la misma hora');
+r = await call('PUT', '/notas/nota_aviso', { aviso_unidad: 'h', aviso_cant: 3 });
+esperado = madrid(Date.parse(r.d.nota.alarma) + 3 * 36e5);
+ok(esperado.hora === lim.hora && esperado.fecha === lim.fecha, 'cambiar a 3 horas antes reprograma');
+r = await call('PUT', '/notas/nota_aviso', { aviso_unidad: 'h', aviso_cant: 13 });
+ok(r.d.nota.aviso_unidad === null && madrid(Date.parse(r.d.nota.alarma)).hora === lim.hora && madrid(Date.parse(r.d.nota.alarma)).fecha === lim.fecha, 'aviso fuera de rango se quita; queda el de la hora límite');
+r = await call('PUT', '/notas/nota_aviso', { titulo: 'Entregar planos firmados' });
+ok(r.d.nota.alarma && madrid(Date.parse(r.d.nota.alarma)).fecha === lim.fecha, 'editar el título no toca el aviso');
+r = await call('POST', '/notas', { id: 'nota_sinhora', titulo: 'Sin hora', fecha_limite: madrid(Date.now() + 10 * 864e5).fecha, aviso_unidad: 's', aviso_cant: 1 });
+ok(madrid(Date.parse(r.d.nota.alarma)).hora === '08:00', 'sin hora límite, el aviso previo suena a las 8:00');
+r = await call('PUT', '/notas/nota_sinhora', { fecha_limite: null });
+ok(r.d.nota.alarma === null && r.d.nota.aviso_unidad === null, 'quitar la fecha quita los avisos');
+// El aviso previo suena y después queda pendiente el de la hora límite
 const d1 = await mf.getD1Database('DB');
+const limCerca = madrid(Date.now() + 30 * 60000);
+r = await call('POST', '/notas', { id: 'nota_doble', titulo: 'Recibir grúa', fecha_limite: limCerca.fecha, hora_limite: limCerca.hora, aviso_unidad: 'h', aviso_cant: 1 });
+ok(madrid(Date.parse(r.d.nota.alarma)).hora === limCerca.hora, 'aviso previo ya pasado: el próximo es el de la hora límite');
+await d1.prepare("UPDATE notas SET alarma = ? WHERE id = 'nota_doble'").bind(new Date(Date.now() - 60000).toISOString()).run();
+const antesPush = pushes.length;
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+await new Promise(res => setTimeout(res, 300));
+r = await call('GET', '/datos');
+const nd = r.d.notas.find(n => n.id === 'nota_doble');
+ok(pushes.length === antesPush + 1 && nd.alarma_enviada === 0 && madrid(Date.parse(nd.alarma)).hora === limCerca.hora, 'tras el aviso previo queda programado el de la hora límite');
+const msgDoble = JSON.parse(ece.decrypt(pushes[pushes.length - 1].body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString());
+ok(msgDoble.cuerpo.startsWith('Fecha límite: ') && msgDoble.cuerpo.includes(limCerca.hora), 'el aviso dice la fecha y hora límite');
+
+// Retención: realizadas caducadas y obra abierta
 await call('POST', '/notas', { id: 'nota_vieja', titulo: 'Vieja sin obra', estado: 'realizada' });
 await call('POST', '/notas', { id: 'nota_obra', titulo: 'Vieja de obra abierta', estado: 'realizada', etiquetas: ['et_mallorca'] });
 await call('POST', '/notas', { id: 'nota_papel', titulo: 'En papelera', estado: 'papelera' });
@@ -147,5 +180,34 @@ const manana = new Date(Date.now() + 864e5).toLocaleDateString('en-CA', { timeZo
 await call('POST', '/notas', { id: 'nota_vence', titulo: 'Vence mañana', prioridad: 'normal', fecha_limite: manana });
 await d1.prepare("UPDATE notas SET subir_critica = 1").run();
 // llamar directamente simulando minuto múltiplo de 15 no es posible; comprobamos la consulta ejecutando el UPDATE vía scheduled cuando toque
-console.log('Pruebas terminadas. Push recibidos:', pushes.length);
 await mf.dispose();
+
+// Paso de las alarmas de la versión anterior: una base con el esquema antiguo y datos
+const mfVieja = new Miniflare({
+  modules: true,
+  script: readFileSync(new URL('../worker/worker.js', import.meta.url), 'utf8'),
+  d1Databases: ['DB'],
+  bindings: { APP_TOKEN: 'secreto', ALLOWED_ORIGIN: 'https://yo.github.io', ANTHROPIC_API_KEY: 'k' },
+});
+const dbVieja = await mfVieja.getD1Database('DB');
+await dbVieja.prepare(`CREATE TABLE notas (
+  id TEXT PRIMARY KEY, usuario_id TEXT NOT NULL DEFAULT 'yo', titulo TEXT NOT NULL, cuerpo TEXT, prioridad TEXT NOT NULL,
+  estado TEXT NOT NULL DEFAULT 'activa', persona_id TEXT, fecha_limite TEXT, alarma TEXT, alarma_enviada INTEGER DEFAULT 0,
+  subir_critica INTEGER DEFAULT 1, duracion INTEGER, origen TEXT, origen_ref TEXT, transcripcion TEXT,
+  creada TEXT, actualizada TEXT, realizada_en TEXT, eliminada_en TEXT, borrar_en TEXT,
+  aviso30 INTEGER DEFAULT 0, aviso7 INTEGER DEFAULT 0, version INTEGER NOT NULL DEFAULT 1)`).run();
+// 10:30 en Madrid (horario de verano, UTC+2) del 15/10/2026 y del 8/10/2026
+await dbVieja.batch([
+  dbVieja.prepare("INSERT INTO notas (id, titulo, prioridad, fecha_limite, alarma) VALUES ('m1', 'Solo alarma', 'normal', NULL, '2026-10-15T08:30:00.000Z')"),
+  dbVieja.prepare("INSERT INTO notas (id, titulo, prioridad, fecha_limite, alarma) VALUES ('m2', 'Alarma el mismo día', 'normal', '2026-10-15', '2026-10-15T08:30:00.000Z')"),
+  dbVieja.prepare("INSERT INTO notas (id, titulo, prioridad, fecha_limite, alarma) VALUES ('m3', 'Alarma una semana antes', 'normal', '2026-10-15', '2026-10-08T08:30:00.000Z')"),
+  dbVieja.prepare("INSERT INTO notas (id, titulo, prioridad, fecha_limite, alarma) VALUES ('m4', 'Sin alarma', 'normal', '2026-10-15', NULL)"),
+]);
+const rv = await mfVieja.dispatchFetch('http://w/datos', { headers: H });
+const migradas = Object.fromEntries((await rv.json()).notas.map(n => [n.id, n]));
+ok(migradas.m1.fecha_limite === '2026-10-15' && migradas.m1.hora_limite === '10:30', 'alarma sin fecha → fecha y hora límite');
+ok(migradas.m2.hora_limite === '10:30' && migradas.m2.aviso_unidad === null && migradas.m2.alarma === '2026-10-15T08:30:00.000Z', 'alarma del mismo día → hora límite, sigue sonando igual');
+ok(migradas.m3.fecha_limite === '2026-10-15' && migradas.m3.hora_limite === '10:30' && migradas.m3.aviso_unidad === 's' && migradas.m3.aviso_cant === 1, 'alarma una semana antes → aviso 1 semana antes');
+ok(migradas.m4.hora_limite === null && migradas.m4.alarma === null, 'nota sin alarma no cambia');
+await mfVieja.dispose();
+console.log('Pruebas terminadas. Push recibidos:', pushes.length);
