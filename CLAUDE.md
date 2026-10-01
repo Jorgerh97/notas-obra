@@ -16,6 +16,7 @@ PWA de notas y tareas de obra, escritas o dictadas, con prioridades, etiquetas, 
 | `app/` | GitHub Pages (repo público `notas-obra`, publicado por `.github/workflows/pages.yml`) | HTML + CSS + JS sin framework ni compilación. |
 | `worker/worker.js` | Cloudflare Worker `notas-obra` (`wrangler.toml`) | API, dictado, push, tareas programadas. |
 | D1 `notas-obra-db` | Cloudflare | Binding `DB`. El worker crea las tablas solo (`ensureSchema`). |
+| R2 `notas-obra-fotos` | Cloudflare | Binding `FOTOS`. Fotos de las notas (`fotos/NOTA/FOTO-mini.jpg` y `-grande.jpg`). |
 | Workers AI | Cloudflare | Binding `AI`. Whisper `@cf/openai/whisper-large-v3-turbo`, `language: 'es'`. |
 | Claude | API de Anthropic | Modelo `claude-sonnet-5` (variable `MODEL` opcional). Solo para analizar dictados. |
 
@@ -60,7 +61,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 ## Fases
 - **Fase 1**: hecha (este código).
 - **Fase 2**: hecha en la versión 1.2.0 (calendario, matriz, arrastres, duración y resumen matutino → `docs/FASE2.md`). Modo Lista/Calendario/Matriz en `S.ui.modo`; arrastres con Pointer Events en el objeto `SOLTAR` (tipos `prio` y `cal`); config compartida `cal_inicio`/`cal_fin` y `resumen_activo`/`resumen_hora`/`resumen_dias`; resumen enviado por `resumenMatutino()` en el cron.
-- **Fase 3** (no empezar sin que lo pida): notas recurrentes, fotos (R2), checklists, PDF para reuniones, conexión bidireccional con su app «Visitas de obra», nota → borrador de Gmail.
+- **Fase 3**: hecha en la versión 1.3.0 (checklists, notas recurrentes, PDF para reunión y fotos en R2 → `docs/FASE3.md`). Columnas nuevas `checklist`, `repetir`, `serie`, `prio_antes`, `fotos`; la siguiente repetición se crea con id `serie_fecha` (`proximaRepeticion` en worker y app); fotos en el bucket R2 `notas-obra-fotos` (binding `FOTOS`), cola local `fotos-pend` en IndexedDB. Descartados por Jorge: nota → borrador de Gmail y conexión con «Visitas de obra».
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

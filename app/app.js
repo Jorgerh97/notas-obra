@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.2.0';
+const VERSION = '1.3.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -75,6 +75,8 @@ function proximoAviso(n, despues = Date.now()) {
   const t = momentosAviso(n).filter(x => x > despues).sort((a, b) => a - b)[0];
   return t ? new Date(t).toISOString() : null;
 }
+// «☑ 1/3» si la nota tiene checklist.
+const textoCheck = n => { const l = n.checklist || []; return l.length ? `☑ ${l.filter(p => p.hecho).length}/${l.length}` : ''; };
 const textoAviso = n => avisoValido(n.aviso_unidad, Number(n.aviso_cant)) ? textoAntelacion(n.aviso_unidad, Number(n.aviso_cant)) : '';
 
 // ---------- Almacenamiento local (IndexedDB) ----------
@@ -115,6 +117,8 @@ const S = {
   flushing: false,
   ed: null, dic: null, rev: null, modal: null,
   alarmasVistas: new Set(),
+  fotosPend: [],          // fotos guardadas en el dispositivo que faltan por subir
+  fotoUrls: new Map(),    // fotos ya cargadas para mostrar (id-tipo → URL)
 };
 
 const etq = id => S.etiquetas.find(e => e.id === id);
@@ -201,6 +205,8 @@ async function flush() {
         } else if (e.status === 409 && op.kind === 'etiqueta' && e.data && e.data.etiqueta) {
           S.outbox.shift();
           remapEtiqueta(op.ref, e.data.etiqueta);
+        } else if (e.status === 404 && op.kind === 'foto') {
+          S.outbox.shift();   // la foto o la nota ya no existen: nada que quitar
         } else if (e.status === 404 && op.kind === 'nota') {
           S.outbox.shift();
           S.notas = S.notas.filter(n => n.id !== op.ref);
@@ -227,6 +233,7 @@ async function flush() {
 function aplicarRespuesta(op, d) {
   if (d && d.nota) {
     const srv = d.nota;
+    srv.fotos = conFotosPendientes(srv.id, srv.fotos);
     const pendiente = S.outbox.some(o => o.kind === 'nota' && o.ref === srv.id);
     const i = S.notas.findIndex(n => n.id === srv.id);
     if (pendiente && i >= 0) {
@@ -240,6 +247,7 @@ function aplicarRespuesta(op, d) {
   }
   if (d && d.persona) { const i = S.personas.findIndex(p => p.id === d.persona.id); if (i >= 0) S.personas[i] = d.persona; }
   if (d && d.vista) { const i = S.vistas.findIndex(v => v.id === d.vista.id); if (i >= 0) S.vistas[i] = d.vista; }
+  if (d && d.fotos && op.kind === 'foto') { const n = nota(op.ref); if (n) n.fotos = conFotosPendientes(op.ref, d.fotos); }
 }
 
 function remapEtiqueta(localId, existente) {
@@ -259,10 +267,12 @@ async function sincronizar() {
   syncando = true;
   try {
     await flush();
+    subirFotos();
     if (S.outbox.length) return;
     const d = await api('/datos');
     if (S.outbox.length) return;   // hubo cambios mientras llegaban los datos
     S.notas = d.notas; S.etiquetas = d.etiquetas; S.personas = d.personas; S.vistas = d.vistas; S.srv = d.config || {};
+    for (const n of S.notas) n.fotos = conFotosPendientes(n.id, n.fotos || []);   // las que aún no han subido
     if (S.ui.vista && !S.vistas.some(v => v.id === S.ui.vista)) { S.ui.vista = null; S.ui.filtro = filtroVacio(); }
     await guardarLocal();
     setSync('ok');
@@ -277,11 +287,12 @@ async function sincronizar() {
 function crearNotaLocal(campos) {
   const t = new Date().toISOString();
   const n = {
-    id: uid(), titulo: campos.titulo, cuerpo: campos.cuerpo || '', prioridad: campos.prioridad || 'normal', estado: 'activa',
+    id: campos.id || uid(), titulo: campos.titulo, cuerpo: campos.cuerpo || '', prioridad: campos.prioridad || 'normal', estado: 'activa',
     persona_id: campos.persona_id || null, fecha_limite: campos.fecha_limite || null, hora_limite: campos.hora_limite || null,
     aviso_cant: campos.aviso_cant || null, aviso_unidad: campos.aviso_unidad || null, alarma: proximoAviso(campos),
-    subir_critica: campos.subir_critica === false ? 0 : 1, duracion: campos.duracion || null, origen: campos.origen || 'manual',
-    creada: t, actualizada: t, version: 1, etiquetas: campos.etiquetas || [], alarma_enviada: 0,
+    subir_critica: campos.subir_critica === false || campos.subir_critica === 0 ? 0 : 1, duracion: campos.duracion || null, origen: campos.origen || 'manual',
+    creada: t, actualizada: t, version: 1, etiquetas: campos.etiquetas || [], checklist: campos.checklist || [], alarma_enviada: 0,
+    repetir: campos.repetir || null, serie: campos.serie || null,
   };
   S.notas.push(n);
   encolar({ kind: 'nota', ref: n.id, method: 'POST', path: '/notas', body: { ...campos, id: n.id, etiquetas: n.etiquetas } });
@@ -442,13 +453,181 @@ function toast(msg, opt = {}) {
 
 function marcarRealizada(id, el) {
   const n = nota(id); if (!n || n.estado !== 'activa') return;
-  editarNotaLocal(id, { estado: 'realizada' });
+  const sig = realizarNota(id);
   if (el) el.classList.add('hecha');
   setTimeout(renderBase, 650);
-  toast('Nota realizada', {
+  toast(sig ? `Nota realizada · la siguiente, el ${diaCorto(sig.fecha_limite)}` : 'Nota realizada', {
     clave: 'hecha', plural: k => k + ' notas realizadas',
-    deshacer: () => { editarNotaLocal(id, { estado: 'activa' }); renderBase(); },
+    deshacer: () => { deshacerRealizada(id, sig); renderBase(); },
   });
+}
+// Realiza una nota y, si se repite, crea ya la siguiente (también sin conexión). Devuelve la siguiente.
+function realizarNota(id) {
+  const n = nota(id);
+  editarNotaLocal(id, { estado: 'realizada' });
+  if (!n || !n.repetir) return null;
+  const sig = proximaRepeticion(n);
+  return nota(sig.id) || crearNotaLocal(sig);
+}
+// Deshacer «realizada»: la siguiente repetición se quita si aún no se ha tocado (el worker hace lo mismo).
+function deshacerRealizada(id, sig) {
+  editarNotaLocal(id, { estado: 'activa' });
+  const s = sig && nota(sig.id);
+  if (!s || s.version !== 1 || s.actualizada !== s.creada) return;
+  S.notas = S.notas.filter(x => x.id !== s.id);
+  S.outbox = S.outbox.filter(o => !(o.kind === 'nota' && o.ref === s.id && !o.enviando));
+  guardarOutbox(); guardarLocal();
+}
+
+// ---------- Fotos ----------
+// Cada foto se reduce en el dispositivo (grande: 1600 px; miniatura: 400 px) y espera en IndexedDB
+// (foto:ID:grande / foto:ID:mini) hasta que se sube. Así se pueden hacer fotos sin cobertura.
+const FOTOS_MAX = 12;
+const quitarPend = id => { S.fotosPend = S.fotosPend.filter(p => p.id !== id); };
+const guardarPend = () => idb.set('fotos-pend', S.fotosPend);
+// Lista de fotos de una nota: las del servidor más las que aún esperan en este dispositivo.
+function conFotosPendientes(notaId, fotos) {
+  const l = [...(fotos || [])];
+  for (const p of S.fotosPend) if (p.nota === notaId && !l.some(f => f.id === p.id)) l.push({ id: p.id, ancho: p.ancho, alto: p.alto, creada: p.creada, pendiente: true });
+  return l;
+}
+async function prepararFoto(file) {
+  let img;
+  try { img = await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { img = await createImageBitmap(file); }
+  const reducir = (lado, calidad) => new Promise((res, rej) => {
+    const k = Math.min(1, lado / Math.max(img.width, img.height)), w = Math.round(img.width * k), h = Math.round(img.height * k);
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(img, 0, 0, w, h);
+    c.toBlob(b => b ? res({ b, w, h }) : rej(new Error('sin imagen')), 'image/jpeg', calidad);
+  });
+  const grande = await reducir(1600, 0.8), mini = await reducir(400, 0.7);
+  if (img.close) img.close();
+  return { grande, mini };
+}
+async function anadirFotos(notaId, files) {
+  const n = nota(notaId); if (!n || !files || !files.length) return;
+  n.fotos = n.fotos || [];
+  const libres = FOTOS_MAX - n.fotos.length;
+  if (libres <= 0) { toast(`Una nota admite como máximo ${FOTOS_MAX} fotos.`); return; }
+  if (files.length > libres) toast(`Solo caben ${libres} ${libres === 1 ? 'foto' : 'fotos'} más en esta nota.`);
+  for (const f of [...files].slice(0, libres)) {
+    try {
+      const { grande, mini } = await prepararFoto(f);
+      const id = 'f' + uid().replace(/-/g, '').slice(0, 24);
+      await idb.set(`foto:${id}:grande`, grande.b);
+      await idb.set(`foto:${id}:mini`, mini.b);
+      const p = { nota: notaId, id, ancho: grande.w, alto: grande.h, creada: new Date().toISOString() };
+      S.fotosPend.push(p);
+      n.fotos.push({ ...p, nota: undefined, pendiente: true });
+    } catch { toast('No se ha podido leer una de las fotos.'); }
+  }
+  await guardarPend(); guardarLocal();
+  pintarFotos(); renderBase();
+  subirFotos();
+}
+let subiendoFotos = false;
+async function subirFotos() {
+  if (subiendoFotos || !S.cfg.url || !S.cfg.token || !navigator.onLine || !S.fotosPend.length) return;
+  subiendoFotos = true;
+  try {
+    for (const p of [...S.fotosPend]) {
+      // La nota tiene que existir ya en el servidor.
+      if (S.outbox.some(o => o.kind === 'nota' && o.ref === p.nota && o.method === 'POST')) continue;
+      const mini = await idb.get(`foto:${p.id}:mini`), grande = await idb.get(`foto:${p.id}:grande`);
+      if (!grande) { quitarPend(p.id); continue; }
+      try {
+        if (mini) await api(`/notas/${p.nota}/fotos/${p.id}/mini`, { method: 'POST', body: mini, raw: true, headers: { 'Content-Type': 'image/jpeg' } });
+        const r = await api(`/notas/${p.nota}/fotos/${p.id}/grande?ancho=${p.ancho}&alto=${p.alto}`, { method: 'POST', body: grande, raw: true, headers: { 'Content-Type': 'image/jpeg' } });
+        quitarPend(p.id);
+        await idb.del(`foto:${p.id}:grande`);   // la miniatura se queda para verla sin conexión
+        const n = nota(p.nota); if (n) n.fotos = conFotosPendientes(p.nota, r.fotos);
+      } catch (e) {
+        if (e.status === 404 || e.status === 400 || e.status === 413) {
+          quitarPend(p.id);
+          if (e.status !== 404) toast('No se ha podido subir una foto: ' + e.message);
+        } else break;   // sin conexión o error del servidor: se reintenta en la próxima sincronización
+      }
+    }
+  } finally {
+    subiendoFotos = false;
+    await guardarPend(); guardarLocal();
+    pintarFotos(); renderBase();
+  }
+}
+// Devuelve una URL para mostrar la foto: desde el dispositivo si la tiene, o pidiéndola al worker con el token.
+async function urlFoto(notaId, fotoId, tipo) {
+  const k = fotoId + '-' + tipo;
+  if (S.fotoUrls.has(k)) return S.fotoUrls.get(k);
+  let blob = await idb.get(`foto:${fotoId}:${tipo}`);
+  if (!blob) {
+    const r = await fetch(S.cfg.url.replace(/\/+$/, '') + `/notas/${notaId}/fotos/${fotoId}/${tipo}`, { headers: { Authorization: 'Bearer ' + S.cfg.token } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    blob = await r.blob();
+    if (tipo === 'mini') idb.set(`foto:${fotoId}:mini`, blob);
+  }
+  const u = URL.createObjectURL(blob);
+  S.fotoUrls.set(k, u);
+  return u;
+}
+// Rellena las <img data-foto> que aún no tienen imagen. La grande, si no se puede cargar, usa la miniatura.
+function cargarFotos(root = document) {
+  for (const img of $$('img[data-foto]:not([src])', root)) {
+    const { nota: n, foto, tipo = 'mini' } = img.dataset;
+    urlFoto(n, foto, tipo).catch(() => tipo === 'grande' ? urlFoto(n, foto, 'mini') : Promise.reject())
+      .then(u => { img.src = u; }).catch(() => { img.closest('.foto-mini, .foto-visor')?.classList.add('sin-foto'); });
+  }
+}
+function quitarFotoLocal(notaId, fotoId) {
+  const n = nota(notaId); if (!n) return;
+  const f = (n.fotos || []).find(x => x.id === fotoId);
+  n.fotos = (n.fotos || []).filter(x => x.id !== fotoId);
+  if (f && f.pendiente) { quitarPend(fotoId); guardarPend(); }
+  else encolar({ kind: 'foto', ref: notaId, method: 'DELETE', path: `/notas/${notaId}/fotos/${fotoId}` });
+  idb.del(`foto:${fotoId}:mini`); idb.del(`foto:${fotoId}:grande`);
+  guardarLocal();
+}
+// Sección «Fotos» del editor (las fotos se guardan al momento, sin esperar a «Guardar»).
+function bloqueFotos(e) {
+  if (!e.id) return `<div class="field" id="ed-fotos"><span class="field-label">Fotos</span><p class="hint">Guarda la nota para poder añadirle fotos.</p></div>`;
+  const l = (nota(e.id) || {}).fotos || [];
+  return `<div class="field" id="ed-fotos"><span class="field-label">Fotos${l.length ? ` <small>${l.length}/${FOTOS_MAX}</small>` : ''}</span>
+    <div class="fotos-grid">${l.map(f => `<button type="button" class="foto-mini" data-act="foto-ver" data-nota="${esc(e.id)}" data-v="${esc(f.id)}" aria-label="Ver foto">
+        <img data-foto="${esc(f.id)}" data-nota="${esc(e.id)}" alt="">${f.pendiente ? '<span class="foto-pend">Por subir</span>' : ''}</button>`).join('')}
+      ${l.length < FOTOS_MAX ? `<label class="foto-mas">+ Foto<input type="file" accept="image/*" multiple data-fotos="${esc(e.id)}" hidden></label>` : ''}</div></div>`;
+}
+function pintarFotos() { const b = $('#ed-fotos'); if (b && S.ed) { b.outerHTML = bloqueFotos(S.ed); cargarFotos($('#ed-fotos')); } }
+function modalFoto() {
+  const { nota: notaId, id } = S.modal, f = ((nota(notaId) || {}).fotos || []).find(x => x.id === id);
+  if (!f) return '';
+  return `<div class="overlay foto-visor" data-act="modal-cerrar" role="dialog" aria-label="Foto">
+    <img data-foto="${esc(id)}" data-nota="${esc(notaId)}" data-tipo="grande" alt="Foto de la nota">
+    <div class="foto-acciones"><button class="btn danger" data-act="foto-quitar">Quitar foto</button><button class="btn" data-act="modal-cerrar">Cerrar</button></div>
+  </div>`;
+}
+
+// ---------- Notas recurrentes ----------
+const REPETIR_N = [['', 'No se repite'], ['laborables', 'Cada día laborable'], ['semanal', 'Cada semana'], ['quincenal', 'Cada 2 semanas'], ['mensual', 'Cada mes']];
+const textoRepetir = r => (REPETIR_N.find(x => x[0] === r) || ['', ''])[1];
+// Mismo cálculo que el worker (fechaSiguiente y proximaRepeticion).
+function fechaSiguiente(f, repetir) {
+  const [y, m, d] = f.split('-').map(Number);
+  if (repetir === 'laborables') { let x = f; do x = addDias(x, 1); while ([0, 6].includes(new Date(x + 'T12:00').getDay())); return x; }
+  if (repetir === 'semanal') return addDias(f, 7);
+  if (repetir === 'quincenal') return addDias(f, 14);
+  if (repetir === 'mensual') return ymd(new Date(y, m, Math.min(d, new Date(y, m + 1, 0).getDate())));
+  return f;
+}
+function proximaRepeticion(n) {
+  const hoy = hoyYmd();
+  let f = n.fecha_limite || hoy;
+  do f = fechaSiguiente(f, n.repetir); while (f < hoy);
+  const serie = n.serie || n.id;
+  return {
+    id: serie + '_' + f, serie, repetir: n.repetir, titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prio_antes || n.prioridad,
+    persona_id: n.persona_id || null, fecha_limite: f, hora_limite: n.hora_limite || null, aviso_unidad: n.aviso_unidad || null, aviso_cant: n.aviso_cant || null,
+    duracion: n.duracion || null, subir_critica: n.subir_critica, checklist: (n.checklist || []).map(p => ({ t: p.t, hecho: false })),
+    etiquetas: [...(n.etiquetas || [])], origen: 'app',
+  };
 }
 function aPapelera(id) {
   editarNotaLocal(id, { estado: 'papelera' });
@@ -474,6 +653,9 @@ function textoCuando(n) {
     const d = ymd(n.alarma);
     partes.push(`<span class="alarm">🔔 ${d === h ? '' : esc(relDia(d)) + ' '}${esc(hora(n.alarma))}</span>`);
   }
+  if (textoCheck(n)) partes.push(`<span class="chk-n">${textoCheck(n)}</span>`);
+  if (n.repetir) partes.push(`<span class="rep" title="${esc(textoRepetir(n.repetir))}">↻</span>`);
+  if ((n.fotos || []).length) partes.push(`<span class="fotos-n">📷 ${n.fotos.length}</span>`);
   return partes.join(' ');
 }
 function filaNota(n) {
@@ -575,7 +757,7 @@ function renderBase() {
         <span class="hint">Agrupar</span>
         <div class="seg"><button data-act="agrupar" data-v="fecha" aria-pressed="${S.ui.agrupar === 'fecha'}">Fecha</button><button data-act="agrupar" data-v="etiqueta" aria-pressed="${S.ui.agrupar === 'etiqueta'}">Etiqueta</button></div>
         <a class="btn small" href="#/filtros">${ICON.filter}Filtros${filtroActivo(S.ui.filtro) ? ' · ' + chips.length : ''}</a>
-        <button class="btn small" data-act="imprimir-lista">PDF de la lista</button>
+        <button class="btn small" data-act="pdf-reunion">PDF para reunión</button>
       </div>
       <div class="toolbar">
         ${selectorModo('mob-only')}
@@ -621,7 +803,7 @@ function cuandoCorto(n) {
   const h = hoyYmd(), hl = n.hora_limite ? ' ' + n.hora_limite : '';
   const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
   if (late) return { t: 'venció ' + (n.fecha_limite === h ? 'hoy' : diaCorto(n.fecha_limite)) + hl, late };
-  return { t: (n.hora_limite ? '' : '⚑ ') + relDia(n.fecha_limite) + hl + (textoAviso(n) ? ' 🔔' : ''), late };
+  return { t: (n.hora_limite ? '' : '⚑ ') + relDia(n.fecha_limite) + hl + (textoAviso(n) ? ' 🔔' : '') + (n.repetir ? ' ↻' : ''), late };
 }
 const ordenFecha = (a, b) => String(a.fecha_limite || '9999').localeCompare(String(b.fecha_limite || '9999'))
   || String(a.hora_limite || '99:99').localeCompare(String(b.hora_limite || '99:99'))
@@ -640,7 +822,7 @@ function vistaMatriz() {
       const c = cuandoCorto(n), tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
       return `<div class="mx-row" data-id="${esc(n.id)}" data-drag="prio" data-titulo="${esc(n.titulo)}" data-cuando="${esc(c.t)}">
         <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
-        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${n.cuerpo ? `<span class="mx-body"> — ${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
+        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${n.cuerpo ? `<span class="mx-body"> — ${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
         <span class="mx-tags desk-only">${tags}</span>
         <span class="mx-when ${c.late ? 'late' : ''}">${esc(c.t)}</span>
       </div>`;
@@ -764,7 +946,7 @@ function calSemana(notas) {
       const fuera = r < vis0 ? '↑ ' : r >= vis1 ? '↓ ' : '';
       return `<button class="cal-ev p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}
         style="top:${top + 1}px;height:${h}px;left:calc(${col / ncol * 100}% + 4px);width:calc(${100 / ncol}% - 8px)" title="${esc(n.hora_limite + ' ' + n.titulo + ' · ' + textoDuracion(dur))}">
-        <b>${fuera}${esc(n.hora_limite)}</b> <span class="t">${esc(n.titulo)}</span> <span class="d">· ${textoDuracion(dur)}${textoAviso(n) ? ' 🔔' : ''}</span>${n.estado === 'activa' ? '<span class="cal-asa" data-estirar aria-hidden="true"></span>' : ''}</button>`;
+        <b>${fuera}${esc(n.hora_limite)}</b> <span class="t">${esc(n.titulo)}</span> <span class="d">· ${textoDuracion(dur)}${textoAviso(n) ? ' 🔔' : ''}${n.repetir ? ' ↻' : ''}</span>${n.estado === 'activa' ? '<span class="cal-asa" data-estirar aria-hidden="true"></span>' : ''}</button>`;
     }).join('');
     const linea = d.hoy && minAhora >= vis0 && minAhora < vis1 ? `<div class="cal-ahora" style="top:${(minAhora - vis0) / 60 * CAL_HH}px"></div>` : '';
     return `<div class="cal-col ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" style="height:${alto}px">${bloques}${linea}</div>`;
@@ -858,7 +1040,7 @@ function calMovil(notas, atrasadas, grupo) {
       ${lista.map(n => { const e = (n.etiquetas || []).map(etq).filter(Boolean)[0];
         return `<button class="calm-item p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}">
           <span class="calm-cuando">${n.hora_limite ? esc(n.hora_limite) + (textoAviso(n) ? ' 🔔' : '') : '⚑ Límite'}</span>
-          <span class="calm-txt"><b>${esc(n.titulo)}</b><small><i class="dot"></i>${PRIO_N[n.prioridad]}${n.hora_limite ? ' · ' + textoDuracion(durNota(n)) : ''}${e ? ' · #' + esc(e.nombre) : ''}</small></span></button>`; }).join('')}</section>`);
+          <span class="calm-txt"><b>${esc(n.titulo)}</b><small><i class="dot"></i>${PRIO_N[n.prioridad]}${n.hora_limite ? ' · ' + textoDuracion(durNota(n)) : ''}${e ? ' · #' + esc(e.nombre) : ''}${textoCheck(n) ? ' · ' + textoCheck(n) : ''}${n.repetir ? ' · ↻' : ''}</small></span></button>`; }).join('')}</section>`);
   }
   cerrarVacios();
   const dom = addDias(lun, 6);
@@ -1077,6 +1259,7 @@ function renderOverlay() {
   S._ovRuta = r;
   const nb = $('#ov .page-body');
   if (nb && sc) nb.scrollTop = sc;
+  cargarFotos($('#ov'));
 }
 function pintarOverlay() {
   const ov = $('#ov');
@@ -1102,6 +1285,7 @@ function renderModal() {
   if (S.modal.tipo === 'etiqueta') m.innerHTML = modalEtiqueta();
   if (S.modal.tipo === 'persona') m.innerHTML = modalPersona();
   if (S.modal.tipo === 'grupo') m.innerHTML = modalGrupo();
+  if (S.modal.tipo === 'foto') { m.innerHTML = modalFoto(); cargarFotos(m); }
 }
 
 // ---------- Editor de notas ----------
@@ -1110,8 +1294,8 @@ function iniciarEditor(id) {
   S.ed = {
     ruta: ruta(), id: n ? n.id : null,
     d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
-        aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])] }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', hora_limite: '', aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas() },
+        aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
+      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', hora_limite: '', aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
     sug: null, sel: 0,
   };
@@ -1153,6 +1337,10 @@ function vistaEditor() {
       <small class="hint">Si no eliges nada, se reservan 10 minutos.</small>
     </div>
     <label class="check"><input type="checkbox" data-ed="subir_critica" ${d.subir_critica ? 'checked' : ''}>Subir a Urgente cuando falten 24 h para la fecha límite</label>
+    <label class="field"><span>Repetir</span><select class="input" data-ed="repetir">${REPETIR_N.map(([v, t]) => `<option value="${v}" ${(d.repetir || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select>
+      ${pistaRepetir(d)}</label>
+    ${bloqueChecklist(d)}
+    ${bloqueFotos(e)}
     ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
     ${n && n.estado !== 'activa' ? `<div class="banner"><span class="grow">Esta nota está ${n.estado === 'realizada' ? 'realizada' : 'en la papelera'}.</span><button class="btn small" data-act="ed-reabrir">Volver a pendiente</button></div>` : ''}`;
   const pie = n && n.estado === 'activa'
@@ -1186,8 +1374,32 @@ function duracionGuardar(d, n) {
 }
 // Fecha, hora y aviso tal como se guardan (sin fecha no hay hora ni aviso).
 function camposFecha(d) {
-  const f = d.fecha_limite || null, u = f && AVISO_RANGO[d.aviso_unidad] ? d.aviso_unidad : null;
-  return { fecha_limite: f, hora_limite: f && d.hora_limite ? d.hora_limite : null, aviso_unidad: u, aviso_cant: u ? Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[u]) : null };
+  // Una nota que se repite necesita fecha: si no la tiene, cuenta desde hoy.
+  const f = d.fecha_limite || (d.repetir ? hoyYmd() : null), u = f && AVISO_RANGO[d.aviso_unidad] ? d.aviso_unidad : null;
+  return { repetir: d.repetir || null, fecha_limite: f, hora_limite: f && d.hora_limite ? d.hora_limite : null, aviso_unidad: u, aviso_cant: u ? Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[u]) : null };
+}
+
+// Explica qué pasará al realizar una nota que se repite.
+function pistaRepetir(d) {
+  if (!d.repetir) return '<small class="hint" id="ed-repetir"></small>';
+  const sig = fechaSiguiente(d.fecha_limite || hoyYmd(), d.repetir);
+  return `<small class="hint" id="ed-repetir">↻ Al marcarla como realizada se creará la siguiente${d.fecha_limite ? '' : ' (sin fecha límite, cuenta desde hoy)'}: ${esc(diaLargo(sig))}.</small>`;
+}
+// Checklist del editor: los puntos se escriben sin repintar; añadir o quitar repinta solo este bloque.
+const checklistGuardar = d => (d.checklist || []).map(p => ({ t: p.t.trim(), hecho: !!p.hecho })).filter(p => p.t);
+function bloqueChecklist(d) {
+  const l = d.checklist || [];
+  return `<div class="field" id="ed-check"><span class="field-label">Checklist${l.length ? ` <small>${l.filter(p => p.hecho).length}/${l.length}</small>` : ''}</span>
+    <div class="chk-lista">${l.map((p, i) => `<div class="chk-item ${p.hecho ? 'hecho' : ''}">
+        <input type="checkbox" data-chk="${i}" ${p.hecho ? 'checked' : ''} aria-label="Hecho">
+        <input class="chk-t" data-chk-t="${i}" value="${esc(p.t)}" maxlength="200" placeholder="Punto ${i + 1}" autocomplete="off">
+        <button type="button" class="icon-btn" data-act="chk-quitar" data-v="${i}" aria-label="Quitar punto">${ICON.close}</button></div>`).join('')}
+      <button type="button" class="chk-anadir" data-act="chk-anadir">+ Añadir punto</button></div></div>`;
+}
+function pintarChecklist(foco) {
+  const b = $('#ed-check'); if (!b || !S.ed) return;
+  b.outerHTML = bloqueChecklist(S.ed.d);
+  if (foco != null) { const i = $(`[data-chk-t="${foco}"]`); if (i) i.focus(); }
 }
 
 function guardarCambiosSilencio() {
@@ -1196,6 +1408,8 @@ function guardarCambiosSilencio() {
   const cambios = {};
   for (const k of Object.keys(campos)) if ((n[k] == null ? null : n[k]) !== campos[k] && !(k === 'cuerpo' && (n[k] || '') === campos[k])) cambios[k] = campos[k];
   if (JSON.stringify([...(n.etiquetas || [])].sort()) !== JSON.stringify([...d.etiquetas].sort())) cambios.etiquetas = d.etiquetas;
+  const chk = checklistGuardar(d);
+  if (JSON.stringify(n.checklist || []) !== JSON.stringify(chk)) cambios.checklist = chk;
   if (Object.keys(cambios).length) editarNotaLocal(e.id, cambios);
 }
 function guardarEditor() {
@@ -1205,12 +1419,13 @@ function guardarEditor() {
   const campos = {
     titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null,
     ...camposFecha(d), duracion: duracionGuardar(d, e.id ? nota(e.id) : null), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
+    checklist: checklistGuardar(d),
   };
   if (e.id) {
     const n = nota(e.id), cambios = {};
     for (const k of Object.keys(campos)) {
-      const antes = k === 'etiquetas' ? JSON.stringify([...(n.etiquetas || [])].sort()) : n[k] == null ? null : n[k];
-      const ahora = k === 'etiquetas' ? JSON.stringify([...campos[k]].sort()) : campos[k];
+      const antes = k === 'etiquetas' ? JSON.stringify([...(n.etiquetas || [])].sort()) : k === 'checklist' ? JSON.stringify(n.checklist || []) : n[k] == null ? null : n[k];
+      const ahora = k === 'etiquetas' ? JSON.stringify([...campos[k]].sort()) : k === 'checklist' ? JSON.stringify(campos[k]) : campos[k];
       if (antes !== ahora && !(k === 'cuerpo' && (antes || '') === ahora)) cambios[k] = campos[k];
     }
     if (Object.keys(cambios).length) editarNotaLocal(e.id, cambios);
@@ -1285,6 +1500,7 @@ function vistaFiltros() {
     </section>`;
   const pie = `<button class="btn" data-act="limpiar-filtro">Limpiar</button>
     ${S.ui.vista && vistaModificada() ? '<button class="btn" data-act="actualizar-grupo">Actualizar grupo</button>' : `<button class="btn" data-act="guardar-grupo" ${filtroActivo(f) ? '' : 'disabled'}>Guardar como grupo</button>`}
+    <button class="btn" data-act="pdf-reunion" ${n ? '' : 'disabled'}>PDF para reunión</button>
     <button class="btn primary" data-act="cerrar">Ver ${n} ${n === 1 ? 'nota' : 'notas'}</button>`;
   return pagina('Filtrar notas', cuerpo, pie, { sheet: true });
 }
@@ -1333,6 +1549,7 @@ function vistaMenu() {
     <div><a class="btn link" href="#/revision" data-reemplazar>Revisión semanal</a></div>
     <div><a class="btn link" href="#/historial" data-reemplazar>Historial y papelera</a></div>
     <div><a class="btn link" href="#/ajustes" data-reemplazar>Ajustes</a></div>
+    <div><button class="btn link" data-act="pdf-reunion">PDF para reunión</button></div>
     <div><button class="btn link" data-act="imprimir-lista">PDF de la lista actual</button></div>
   </div><p class="hint">${esc(textoSync() || 'Sin cambios pendientes')} · versión ${VERSION}</p>`;
   return pagina('Menú', cuerpo, '', { sheet: true });
@@ -1340,11 +1557,45 @@ function vistaMenu() {
 
 // ---------- Impresión / PDF ----------
 function imprimir(titulo, notas) {
-  const filas = notas.map(n => `<tr><td>${PRIO_N[n.prioridad]}</td><td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}</td>
+  const filas = notas.map(n => `<tr><td>${PRIO_N[n.prioridad]}</td><td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}${(n.checklist || []).map(p => '<br>' + (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('')}</td>
     <td>${(n.etiquetas || []).map(id => '#' + esc((etq(id) || {}).nombre || '')).join(' ')}</td><td>${esc((per(n.persona_id) || {}).nombre || '')}</td>
-    <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : '')) : ''}${textoAviso(n) ? '<br>Aviso ' + esc(textoAviso(n)) : ''}</td></tr>`).join('');
+    <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : '')) : ''}${textoAviso(n) ? '<br>Aviso ' + esc(textoAviso(n)) : ''}${n.repetir ? '<br>↻ ' + esc(textoRepetir(n.repetir)) : ''}</td></tr>`).join('');
   $('#print').innerHTML = `<h1>${esc(titulo)}</h1><p>${notas.length} notas · ${esc(new Date().toLocaleString('es-ES'))}</p>
     <table><thead><tr><th>Prioridad</th><th>Nota</th><th>Etiquetas</th><th>Asignada a</th><th>Estado y fechas</th></tr></thead><tbody>${filas}</tbody></table>`;
+  setTimeout(() => window.print(), 50);
+}
+// PDF para reunión: las notas que se están viendo, agrupadas por obra, con huecos para escribir a mano.
+function imprimirReunion(titulo, notas) {
+  const hoy = hoyYmd();
+  const obraDe = n => (n.etiquetas || []).map(etq).find(e => e && e.tipo === 'obra');
+  const grupos = new Map();
+  for (const n of notas) { const o = obraDe(n), k = o ? o.nombre : ''; if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(n); }
+  const claves = [...grupos.keys()].sort((a, b) => (a ? 0 : 1) - (b ? 0 : 1) || a.localeCompare(b));
+  const vencidas = notas.filter(n => n.fecha_limite && (n.fecha_limite < hoy || (n.fecha_limite === hoy && n.hora_limite && n.hora_limite < hora(Date.now())))).length;
+  const urgentes = notas.filter(n => n.prioridad === 'critica').length;
+  const fila = n => {
+    const otras = (n.etiquetas || []).map(etq).filter(e => e && e !== obraDe(n)).map(e => '#' + esc(e.nombre)).join(' ');
+    const late = n.fecha_limite && n.fecha_limite < hoy;
+    return `<tr class="pr-${n.prioridad}">
+      <td class="pr-prio">${PRIO_N[n.prioridad]}</td>
+      <td><b>${esc(n.titulo)}</b>${n.repetir ? ' <span class="pr-gris">↻ ' + esc(textoRepetir(n.repetir)) + '</span>' : ''}
+        ${n.cuerpo ? `<div>${esc(n.cuerpo).replace(/\n/g, '<br>')}</div>` : ''}
+        ${(n.checklist || []).length ? `<div class="pr-chk">${n.checklist.map(p => (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('<br>')}</div>` : ''}
+        ${otras || (n.fotos || []).length ? `<div class="pr-gris">${otras}${(n.fotos || []).length ? ` 📷 ${n.fotos.length}` : ''}</div>` : ''}</td>
+      <td>${esc((per(n.persona_id) || {}).nombre || '')}</td>
+      <td>${n.fecha_limite ? `<span class="${late ? 'pr-late' : ''}">${late ? 'Venció ' : ''}${esc(diaCorto(n.fecha_limite).replace(',', ''))}${n.hora_limite ? ' ' + n.hora_limite : ''}</span>` : '—'}</td>
+      <td></td></tr>`;
+  };
+  $('#print').innerHTML = `<div class="pr">
+    <div class="pr-cab"><div><h1>Reunión · ${esc(titulo)}</h1><div class="pr-gris">${esc(mayus(new Date().toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })))}</div></div>
+      <div class="pr-res">${notas.length} ${notas.length === 1 ? 'nota' : 'notas'}${urgentes ? ' · ' + urgentes + (urgentes === 1 ? ' urgente' : ' urgentes') : ''}${vencidas ? ' · ' + vencidas + (vencidas === 1 ? ' vencida' : ' vencidas') : ''}</div></div>
+    <div class="pr-datos"><div><span>Asistentes</span></div><div><span>Lugar</span></div><div><span>Próxima reunión</span></div></div>
+    ${claves.map(k => `<h2>${k ? '#' + esc(k) : 'Sin obra'} <small>${grupos.get(k).length}</small></h2>
+      <table><thead><tr><th style="width:9%">Prioridad</th><th style="width:38%">Nota</th><th style="width:12%">Responsable</th><th style="width:11%">Fecha límite</th><th>Acuerdos</th></tr></thead>
+      <tbody>${grupos.get(k).sort((a, b) => rankPrio(a.prioridad) - rankPrio(b.prioridad) || ordenFecha(a, b)).map(fila).join('')}</tbody></table>`).join('')}
+    <div class="pr-otros"><span>Otros temas</span></div>
+    <div class="pr-pie">Notas de obra · generado el ${esc(new Date().toLocaleString('es-ES', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }))}</div>
+  </div>`;
   setTimeout(() => window.print(), 50);
 }
 function imprimirHtml(html) {
@@ -1494,6 +1745,7 @@ function propuestaDe(n, a) {
     persona_id: (S.personas.find(p => norm(p.nombre) === norm(n.persona)) || {}).id || '',
     fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '', aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 0,
     duracion: n.duracion || DURACION_DEF, durDefecto: !n.duracion,
+    checklist: (n.checklist || []).map(t => ({ t, hecho: false })), repetir: n.repetir || '',
   };
 }
 
@@ -1533,7 +1785,11 @@ function tarjetaPropuesta(p, i) {
       <label class="field"><small>Asignar a</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">Nadie</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
       <label class="field"><small>Aviso previo</small><select class="input" data-p="${i}" data-f="aviso"><option value="">Ninguno</option>${Object.keys(AVISO_RANGO).map(u => `<optgroup label="${AVISO_N[u][1][0].toUpperCase() + AVISO_N[u][1].slice(1)}">${Array.from({ length: AVISO_RANGO[u] }, (_, j) => j + 1).map(c => `<option value="${u}:${c}" ${p.aviso_unidad === u && p.aviso_cant === c ? 'selected' : ''}>${textoAntelacion(u, c)}</option>`).join('')}</optgroup>`).join('')}</select></label>
     </div>
-    <label class="field"><small>Duración · ${p.durDefecto ? 'por defecto' : 'la que se ha entendido'}</small><select class="input" data-p="${i}" data-f="duracion">${[...new Set([...DURACIONES.map(x => x[0]), p.duracion])].sort((a, b) => a - b).map(m => `<option value="${m}" ${p.duracion === m ? 'selected' : ''}>${textoDuracion(m)}</option>`).join('')}</select></label>
+    ${p.checklist.length ? `<label class="field"><small>Checklist · un punto por línea</small><textarea class="input" rows="${Math.min(p.checklist.length + 1, 8)}" data-p="${i}" data-f="checklist" style="min-height:64px">${esc(p.checklist.map(x => x.t).join('\n'))}</textarea></label>` : ''}
+    <div class="grid2">
+      <label class="field"><small>Duración · ${p.durDefecto ? 'por defecto' : 'la que se ha entendido'}</small><select class="input" data-p="${i}" data-f="duracion">${[...new Set([...DURACIONES.map(x => x[0]), p.duracion])].sort((a, b) => a - b).map(m => `<option value="${m}" ${p.duracion === m ? 'selected' : ''}>${textoDuracion(m)}</option>`).join('')}</select></label>
+      <label class="field"><small>Repetir</small><select class="input" data-p="${i}" data-f="repetir">${REPETIR_N.map(([v, t]) => `<option value="${v}" ${(p.repetir || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+    </div>
   </article>`;
 }
 async function guardarDictado() {
@@ -1548,7 +1804,7 @@ async function guardarDictado() {
     }
     crearNotaLocal({
       titulo: p.titulo.trim() || 'Nota dictada', cuerpo: p.cuerpo.trim(), prioridad: p.prioridad, etiquetas: [...new Set(ids)],
-      persona_id: p.persona_id || null, ...camposFecha(p), duracion: p.duracion || null,
+      persona_id: p.persona_id || null, ...camposFecha(p), duracion: p.duracion || null, checklist: checklistGuardar(p),
       origen: 'voz', origen_ref: p.audio, transcripcion: p.transcripcion,
     });
     audios.add(p.audio); n++;
@@ -1641,7 +1897,7 @@ function vistaRevision() {
 }
 function accionRevision(v) {
   const R = S.rev, id = R.ids[R.i];
-  if (v === 'hecha') { editarNotaLocal(id, { estado: 'realizada' }); R.hechas++; }
+  if (v === 'hecha') { realizarNota(id); R.hechas++; }
   if (v === 'eliminar') { editarNotaLocal(id, { estado: 'papelera' }); R.borradas++; }
   if (v === 'mantener') { editarNotaLocal(id, {}); R.mantenidas++; }
   if (v === 'reprogramar') { R.fecha = true; renderOverlay(); return; }
@@ -1661,9 +1917,9 @@ function vistaConflicto() {
   const c = S.conflictos[0];
   if (!c) return pagina('Conflictos', '<p>No hay conflictos pendientes.</p>', `<button class="btn primary" data-act="cerrar">Cerrar</button>`);
   const mia = nota(c.op.ref) || {}, srv = c.servidor;
-  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['estado', 'Estado'], ['persona_id', 'Asignada a']];
-  const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'aviso_unidad' ? (textoAviso(n) || '—') : k === 'persona_id' ? ((per(n[k]) || {}).nombre || '—') : (n[k] || '—');
-  const col = (n, t) => `<div><b>${t}</b>${campos.map(([k, l]) => `<span class="${String(mia[k] || '') !== String(srv[k] || '') ? 'changed' : ''}"><small class="hint">${l}:</small> ${esc(val(n, k))}</span>`).join('')}</div>`;
+  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['checklist', 'Checklist'], ['estado', 'Estado'], ['persona_id', 'Asignada a']];
+  const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'aviso_unidad' ? (textoAviso(n) || '—') : k === 'checklist' ? ((n.checklist || []).map(p => (p.hecho ? '☑ ' : '☐ ') + p.t).join(' · ') || '—') : k === 'persona_id' ? ((per(n[k]) || {}).nombre || '—') : (n[k] || '—');
+  const col = (n, t) => `<div><b>${t}</b>${campos.map(([k, l]) => `<span class="${JSON.stringify(mia[k] || '') !== JSON.stringify(srv[k] || '') ? 'changed' : ''}"><small class="hint">${l}:</small> ${esc(val(n, k))}</span>`).join('')}</div>`;
   const cuerpo = `<p>Esta nota se cambió en otro dispositivo mientras la editabas aquí. Elige qué versión quieres conservar. Lo marcado en naranja es lo que difiere.</p>
     <div class="diff">${col(mia, 'Tu versión (este dispositivo)')}${col(srv, 'Versión guardada (otro dispositivo)')}</div>`;
   return pagina(S.conflictos.length > 1 ? `Conflicto (1 de ${S.conflictos.length})` : 'Conflicto', cuerpo,
@@ -1904,6 +2160,11 @@ const ACT = {
     toast('Grupo «' + v.nombre + '» actualizado');
   },
   'imprimir-lista': () => imprimir(nombreVista(), visibles()),
+  'pdf-reunion': () => {
+    const notas = visibles();
+    if (!notas.length) { toast('No hay notas que llevar a la reunión con este filtro.'); return; }
+    imprimirReunion(nombreVista(), notas);
+  },
 
   // Filtros
   'f-tag': (el) => { toggle(S.ui.filtro.etiquetas, el.dataset.v); cambioFiltro(); },
@@ -1920,6 +2181,15 @@ const ACT = {
     renderOverlay();
     if (S.ed.durOtra) { const i = $('[data-ed="duracion"]'); if (i) i.focus(); }
   },
+  'foto-ver': (el) => { S.modal = { tipo: 'foto', nota: el.dataset.nota, id: el.dataset.v }; renderModal(); },
+  'foto-quitar': () => {
+    if (!confirm('¿Quitar esta foto de la nota?')) return;
+    quitarFotoLocal(S.modal.nota, S.modal.id);
+    S.modal = null; renderModal(); pintarFotos(); renderBase();
+    toast('Foto quitada');
+  },
+  'chk-anadir': () => { const l = S.ed.d.checklist; l.push({ t: '', hecho: false }); pintarChecklist(l.length - 1); },
+  'chk-quitar': (el) => { S.ed.d.checklist.splice(Number(el.dataset.v), 1); pintarChecklist(); },
   'ed-aviso': (el) => { const d = S.ed.d; d.aviso_unidad = el.dataset.v; if (d.aviso_unidad) d.aviso_cant = Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[d.aviso_unidad]); pintarAvisos(); },
   'ed-quitar-tag': (el) => { S.ed.d.etiquetas = S.ed.d.etiquetas.filter(x => x !== el.dataset.id); renderOverlay(); },
   'ed-hash': () => {
@@ -2129,10 +2399,13 @@ document.addEventListener('input', ev => {
   const t = ev.target;
   if (t.id === 'q' || t.id === 'qm') { S.ui.q = t.value; clearTimeout(S._qt); S._qt = setTimeout(() => { const pos = t.selectionStart, id = t.id; renderBase(); const n = $('#' + id); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 200); return; }
   if (t.id === 'hq') { S.ui.histQ = t.value; clearTimeout(S._hq); S._hq = setTimeout(() => { const pos = t.selectionStart; renderOverlay(); const n = $('#hq'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); return; }
+  if (S.ed && t.dataset.chkT != null) { S.ed.d.checklist[Number(t.dataset.chkT)].t = t.value; return; }
+  if (S.ed && t.dataset.chk != null) { S.ed.d.checklist[Number(t.dataset.chk)].hecho = t.checked; pintarChecklist(); return; }
   if (t.dataset.ed && S.ed) {
     S.ed.d[t.dataset.ed] = t.type === 'checkbox' ? t.checked : t.value;
     if (t.dataset.ed === 'cuerpo') onCuerpo(t);
     if (['fecha_limite', 'hora_limite', 'aviso_cant'].includes(t.dataset.ed)) pintarAvisos();
+    if (['fecha_limite', 'repetir'].includes(t.dataset.ed)) { const p = $('#ed-repetir'); if (p) p.outerHTML = pistaRepetir(S.ed.d); }
     if (t.dataset.ed === 'duracion') S.ed.d.duracion = Number(t.value);
     return;
   }
@@ -2140,6 +2413,7 @@ document.addEventListener('input', ev => {
     const p = S.dic.propuestas[t.dataset.p], f = t.dataset.f;
     if (f === 'incluir') { p.incluir = t.checked; renderOverlay(); return; }
     if (f === 'duracion') { p.duracion = Number(t.value); p.durDefecto = false; renderOverlay(); return; }
+    if (f === 'checklist') { p.checklist = t.value.split('\n').map(x => ({ t: x, hecho: false })); return; }
     if (f === 'aviso') { const [u, c] = t.value.split(':'); p.aviso_unidad = u || ''; p.aviso_cant = Number(c) || 0; return; }
     if (f === 'add-tag') { if (t.value) { p.etiquetas.push(t.value); renderOverlay(); } return; }
     p[f] = t.value;
@@ -2150,6 +2424,7 @@ document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.dataset.ed && S.ed && t.type === 'checkbox') S.ed.d[t.dataset.ed] = t.checked;
   if (t.dataset.p != null && S.dic && (t.dataset.f === 'add-tag' || t.dataset.f === 'incluir')) return;
+  if (t.dataset.fotos) { const files = [...t.files]; t.value = ''; anadirFotos(t.dataset.fotos, files); return; }
   if (t.matches('[data-grupo-vista]')) { S.ui.grupoVista = t.value; guardarUi(); renderBase(); return; }
   if (t.dataset.resumen) {
     if (t.dataset.resumen === 'activo') guardarResumen('activo', t.checked ? '1' : '0');
@@ -2182,6 +2457,12 @@ function onCuerpo(ta) {
 }
 document.addEventListener('keydown', ev => {
   const t = ev.target;
+  // Checklist: Enter añade un punto debajo; borrar en un punto vacío lo quita.
+  if (S.ed && t.dataset && t.dataset.chkT != null) {
+    const i = Number(t.dataset.chkT), l = S.ed.d.checklist;
+    if (ev.key === 'Enter') { ev.preventDefault(); l.splice(i + 1, 0, { t: '', hecho: false }); pintarChecklist(i + 1); return; }
+    if (ev.key === 'Backspace' && !t.value) { ev.preventDefault(); l.splice(i, 1); pintarChecklist(l.length ? Math.max(0, i - 1) : null); return; }
+  }
   if (t.id === 'ed-cuerpo' && S.ed && S.ed.sug && S.ed.sug.lista.length) {
     const n = S.ed.sug.lista.length;
     if (ev.key === 'ArrowDown') { ev.preventDefault(); S.ed.sel = (S.ed.sel + 1) % n; pintarSug(); return; }
@@ -2219,7 +2500,8 @@ window.addEventListener('hashchange', () => {
 // ---------- Arranque ----------
 async function arrancar() {
   try {
-    const [cfg, datos, ob, audios, ui] = await Promise.all([idb.get('config'), idb.get('datos'), idb.get('outbox'), idb.get('audios'), idb.get('ui')]);
+    const [cfg, datos, ob, audios, ui, fp] = await Promise.all([idb.get('config'), idb.get('datos'), idb.get('outbox'), idb.get('audios'), idb.get('ui'), idb.get('fotos-pend')]);
+    if (Array.isArray(fp)) S.fotosPend = fp;
     if (cfg) Object.assign(S.cfg, cfg);
     if (!S.cfg.dispositivo) S.cfg.dispositivo = nombrePorDefecto();
     if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; }

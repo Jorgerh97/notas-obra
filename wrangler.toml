@@ -15,6 +15,10 @@ binding = "DB"
 database_name = "notas-obra-db"
 database_id = "84f6d093-2026-4e51-97ca-ef4f62b2b0bd"
 
+[[r2_buckets]]
+binding = "FOTOS"
+bucket_name = "notas-obra-fotos"   # fotos de las notas (fase 3)
+
 [triggers]
 crons = ["* * * * *"]       # cada minuto: alarmas, subida a Crítica y tarea diaria
 

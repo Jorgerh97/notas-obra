@@ -14,7 +14,7 @@ const b64u = b => Buffer.from(b).toString('base64url');
 const mf = new Miniflare({
   modules: true,
   script: readFileSync(new URL('../worker/worker.js', import.meta.url), 'utf8'),
-  d1Databases: ['DB'],
+  d1Databases: ['DB'], r2Buckets: ['FOTOS'],
   bindings: { APP_TOKEN: 'secreto', ALLOWED_ORIGIN: 'https://yo.github.io', ANTHROPIC_API_KEY: 'k' },
   outboundService: async (req) => {
     const url = new URL(req.url);
@@ -22,7 +22,7 @@ const mf = new Miniflare({
       claudeInput = await req.json();
       return new Response(JSON.stringify({ stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'guardar_notas', input: { notas: [
         { titulo: 'Confirmar hormigonado', cuerpo: 'Llamar a planta', prioridad: 'critica', etiquetas: ['mallorca245', 'Inventada'], evidencias: [{ oido: 'la de Mallorca', etiqueta: 'Mallorca245' }], persona: 'encargado', fecha_limite: '2026-09-30', hora_limite: '07:30', aviso_unidad: 'h', aviso_cant: 2 },
-        { titulo: 'Revisar bajantes', cuerpo: 'Con el fontanero', prioridad: 'normal', etiquetas: [], etiquetas_nuevas: [{ nombre: 'Fontanería general', similar: 'Instalaciones', oido: 'fontanero' }], persona: 'Nadie', fecha_limite: 'mañana', hora_limite: '25:00', aviso_unidad: 'd', aviso_cant: 9 },
+        { titulo: 'Revisar bajantes', cuerpo: 'Con el fontanero', prioridad: 'normal', etiquetas: [], etiquetas_nuevas: [{ nombre: 'Fontanería general', similar: 'Instalaciones', oido: 'fontanero' }], persona: 'Nadie', fecha_limite: 'mañana', hora_limite: '25:00', aviso_unidad: 'd', aviso_cant: 9, checklist: ['Bajante 1', '  ', 'Bajante 2'] },
       ] } }] }), { headers: { 'content-type': 'application/json' } });
     }
     if (url.hostname === 'push.example') {
@@ -79,6 +79,19 @@ ok(b.etiquetas_nuevas[0].nombre === 'Fontanería_general' && b.etiquetas_nuevas[
 ok(b.fecha_limite === '' && a.fecha_limite === '2026-09-30' && a.hora_limite === '07:30', 'fechas validadas');
 ok(a.aviso_unidad === 'h' && a.aviso_cant === 2 && b.aviso_unidad === '' && b.hora_limite === '', 'aviso del dictado validado (fuera de rango se descarta)');
 ok(claudeInput.messages[0].content.includes('Mallorca245 (obra; alias: Mallorca)'), 'Claude recibe etiquetas con alias');
+ok(JSON.stringify(b.checklist) === '["Bajante 1","Bajante 2"]' && JSON.stringify(a.checklist) === '[]', 'checklist del dictado (sin puntos vacíos)');
+
+// Checklists
+r = await call('POST', '/notas', { id: 'nota_check', titulo: 'Pedir oferta de carpintería', checklist: [{ t: 'Industrial 1', hecho: true }, { t: 'Industrial 2' }, 'Industrial 3', { t: '' }] });
+ok(r.s === 200 && r.d.nota.checklist.length === 3 && r.d.nota.checklist[0].hecho === true && r.d.nota.checklist[2].hecho === false, 'crear nota con checklist (limpio)');
+r = await call('PUT', '/notas/nota_check', { checklist: r.d.nota.checklist.map(p => ({ ...p, hecho: true })) });
+ok(r.d.nota.checklist.every(p => p.hecho), 'marcar puntos del checklist');
+r = await call('PUT', '/notas/nota_check', { checklist: Array.from({ length: 80 }, (_, i) => 'Punto ' + i) });
+ok(r.d.nota.checklist.length === 50, 'checklist limitado a 50 puntos');
+r = await call('PUT', '/notas/nota_check', { checklist: [] });
+ok(Array.isArray(r.d.nota.checklist) && r.d.nota.checklist.length === 0, 'vaciar checklist');
+r = await call('GET', '/datos');
+ok(r.d.notas.every(n => Array.isArray(n.checklist)), 'todas las notas traen checklist como lista');
 
 // Push: suscripción, alarma y cifrado
 r = await call('GET', '/push/clave'); ok(r.s === 200 && r.d.clave.length > 80, 'clave VAPID generada');
@@ -152,6 +165,82 @@ const nd = r.d.notas.find(n => n.id === 'nota_doble');
 ok(pushes.length === antesPush + 1 && nd.alarma_enviada === 0 && madrid(Date.parse(nd.alarma)).hora === limCerca.hora, 'tras el aviso previo queda programado el de la hora límite');
 const msgDoble = JSON.parse(ece.decrypt(pushes[pushes.length - 1].body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString());
 ok(msgDoble.cuerpo.startsWith('Fecha límite: ') && msgDoble.cuerpo.includes(limCerca.hora), 'el aviso dice la fecha y hora límite');
+
+// Fotos (R2 simulado)
+const bin = async (method, path, buf) => {
+  const res = await mf.dispatchFetch('http://w' + path, { method, headers: { Authorization: 'Bearer secreto', 'Content-Type': 'image/jpeg' }, body: buf });
+  return { s: res.status, tipo: res.headers.get('content-type'), buf: Buffer.from(await res.arrayBuffer()) };
+};
+const jpeg = n => Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(n, 7)]);
+await call('POST', '/notas', { id: 'nota_fotos', titulo: 'Línea de vida', prioridad: 'critica' });
+let vf = (await call('GET', '/datos')).d.notas.find(n => n.id === 'nota_fotos').version;
+let rb = await bin('POST', '/notas/nota_fotos/fotos/foto_000001/mini', jpeg(300));
+rb = await bin('POST', '/notas/nota_fotos/fotos/foto_000001/grande?ancho=1600&alto=1200', jpeg(5000));
+let fotosN = JSON.parse(rb.buf.toString()).fotos;
+ok(rb.s === 200 && fotosN.length === 1 && fotosN[0].ancho === 1600 && fotosN[0].alto === 1200, 'subir foto (miniatura y grande)');
+rb = await bin('GET', '/notas/nota_fotos/fotos/foto_000001/grande');
+ok(rb.s === 200 && rb.tipo === 'image/jpeg' && rb.buf.length === 5003, 'ver la foto grande');
+rb = await bin('POST', '/notas/nota_fotos/fotos/foto_000001/grande?ancho=1600&alto=1200', jpeg(5000));
+r = await call('GET', '/datos'); let nf = r.d.notas.find(n => n.id === 'nota_fotos');
+ok(nf.fotos.length === 1 && nf.version === vf, 'reintentar la subida no duplica ni cambia la versión');
+r = await call('PUT', '/notas/nota_fotos', { titulo: 'Línea de vida cubierta', fotos: [] });
+ok(r.d.nota.fotos.length === 1, 'editar la nota no toca sus fotos');
+for (let i = 2; i <= 12; i++) await bin('POST', `/notas/nota_fotos/fotos/foto_${String(i).padStart(6, '0')}/grande`, jpeg(10));
+rb = await bin('POST', '/notas/nota_fotos/fotos/foto_000013/grande', jpeg(10));
+ok(rb.s === 400, 'máximo 12 fotos por nota');
+rb = await bin('POST', '/notas/nota_fotos/fotos/foto_000014/enorme', jpeg(10));
+ok(rb.s === 400, 'tipo de foto no válido');
+rb = await bin('DELETE', '/notas/nota_fotos/fotos/foto_000001');
+ok(JSON.parse(rb.buf.toString()).fotos.length === 11 && (await bin('GET', '/notas/nota_fotos/fotos/foto_000001/mini')).s === 404, 'quitar una foto');
+const r2 = await mf.getR2Bucket('FOTOS');
+await call('PUT', '/notas/nota_fotos', { estado: 'papelera' });
+await call('DELETE', '/notas/nota_fotos');
+ok((await r2.list({ prefix: 'fotos/nota_fotos/' })).objects.length === 0, 'al borrar la nota se borran sus fotos');
+rb = await bin('POST', '/notas/no_existe_x/fotos/foto_000001/grande', jpeg(10));
+ok(rb.s === 404, 'foto de una nota que no existe');
+
+// Notas recurrentes
+const hoyM = madrid(Date.now()).fecha;
+const masDias = (f, n) => new Date(Date.parse(f + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);
+r = await call('POST', '/notas', { id: 'nota_semanal', titulo: 'Reunión de obra', prioridad: 'normal', fecha_limite: hoyM, hora_limite: '09:00', duracion: 90,
+  aviso_unidad: 'h', aviso_cant: 1, repetir: 'semanal', etiquetas: ['et_mallorca'], checklist: [{ t: 'Acta', hecho: true }] });
+ok(r.d.nota.repetir === 'semanal', 'nota semanal creada');
+r = await call('PUT', '/notas/nota_semanal', { estado: 'realizada' });
+const idSig = 'nota_semanal_' + masDias(hoyM, 7);
+r = await call('GET', '/datos');
+let sig = r.d.notas.find(n => n.id === idSig);
+ok(sig && sig.estado === 'activa' && sig.fecha_limite === masDias(hoyM, 7) && sig.hora_limite === '09:00' && sig.duracion === 90, 'al realizarla se crea la de la semana siguiente');
+ok(sig && sig.serie === 'nota_semanal' && sig.repetir === 'semanal' && sig.aviso_unidad === 'h' && sig.etiquetas[0] === 'et_mallorca' && sig.checklist[0].hecho === false, 'la siguiente copia serie, aviso, etiquetas y checklist desmarcado');
+ok(sig && sig.alarma, 'la siguiente tiene su aviso programado');
+r = await call('POST', '/notas', { id: idSig, titulo: 'Copia desde la app' });
+ok(r.d.nota.titulo === 'Reunión de obra', 'crear la siguiente desde la app no la duplica');
+r = await call('PUT', '/notas/nota_semanal', { estado: 'activa' });
+r = await call('GET', '/datos');
+ok(!r.d.notas.some(n => n.id === idSig), 'deshacer quita la siguiente si no se ha tocado');
+// Marcada con retraso: la siguiente cae hoy o después
+await call('POST', '/notas', { id: 'nota_atrasada_sem', titulo: 'Revisión semanal', fecha_limite: masDias(hoyM, -20), repetir: 'semanal' });
+await call('PUT', '/notas/nota_atrasada_sem', { estado: 'realizada' });
+r = await call('GET', '/datos');
+sig = r.d.notas.find(n => n.serie === 'nota_atrasada_sem');
+ok(sig && sig.fecha_limite >= hoyM && sig.fecha_limite <= masDias(hoyM, 6), 'marcada con retraso: la siguiente no queda en el pasado');
+// Mensual a fin de mes y laborables en viernes
+await call('POST', '/notas', { id: 'nota_mensual', titulo: 'Certificación', fecha_limite: '2027-01-31', repetir: 'mensual' });
+await call('PUT', '/notas/nota_mensual', { estado: 'realizada' });
+r = await call('GET', '/datos');
+ok(r.d.notas.some(n => n.id === 'nota_mensual_2027-02-28'), 'mensual del 31 de enero pasa al 28 de febrero');
+await call('POST', '/notas', { id: 'nota_laborable', titulo: 'Parte diario', fecha_limite: '2027-01-08', repetir: 'laborables' });
+await call('PUT', '/notas/nota_laborable', { estado: 'realizada' });
+r = await call('GET', '/datos');
+ok(r.d.notas.some(n => n.id === 'nota_laborable_2027-01-11'), 'laborables: del viernes al lunes');
+// «Hecha» desde el aviso y prioridad subida sola a Urgente
+await call('POST', '/notas', { id: 'nota_quincenal', titulo: 'Reunión con la DF', prioridad: 'normal', fecha_limite: '2027-03-01', repetir: 'quincenal' });
+await d1.prepare("UPDATE notas SET prio_antes = prioridad, prioridad = 'critica' WHERE id = 'nota_quincenal'").run();
+r = await call('POST', '/notas/nota_quincenal/alarma', { accion: 'hecha' });
+r = await call('GET', '/datos');
+sig = r.d.notas.find(n => n.id === 'nota_quincenal_2027-03-15');
+ok(sig && sig.prioridad === 'normal', '«Hecha» desde el aviso crea la siguiente con su prioridad original');
+r = await call('PUT', '/notas/nota_check', { repetir: 'cada siglo' });
+ok(r.d.nota.repetir === null, 'repetición no válida se ignora');
 
 // Resumen matutino: a la hora y en los días elegidos (hora de Madrid), una vez al día
 const descifrar = x => JSON.parse(ece.decrypt(x.body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString());
@@ -245,5 +334,8 @@ ok(migradas.m1.fecha_limite === '2026-10-15' && migradas.m1.hora_limite === '10:
 ok(migradas.m2.hora_limite === '10:30' && migradas.m2.aviso_unidad === null && migradas.m2.alarma === '2026-10-15T08:30:00.000Z', 'alarma del mismo día → hora límite, sigue sonando igual');
 ok(migradas.m3.fecha_limite === '2026-10-15' && migradas.m3.hora_limite === '10:30' && migradas.m3.aviso_unidad === 's' && migradas.m3.aviso_cant === 1, 'alarma una semana antes → aviso 1 semana antes');
 ok(migradas.m4.hora_limite === null && migradas.m4.alarma === null, 'nota sin alarma no cambia');
+const rc = await mfVieja.dispatchFetch('http://w/notas', { method: 'POST', headers: H, body: JSON.stringify({ id: 'nota_vieja_check', titulo: 'Con checklist', checklist: ['Uno'] }) });
+const rcd = await rc.json();
+ok(rcd.nota && rcd.nota.checklist[0].t === 'Uno', 'base antigua: columna de checklist añadida ' + (rcd.nota ? '' : JSON.stringify(rcd)));
 await mfVieja.dispose();
 console.log('Pruebas terminadas. Push recibidos:', pushes.length);

@@ -132,18 +132,19 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS archivos (id TEXT PRIMARY KEY, titulo TEXT, motivo TEXT, creado TEXT, notas INTEGER, html TEXT)`,
 ];
 // Columnas añadidas después de la primera versión (la base de producción ya tiene datos).
-const COLUMNAS_NUEVAS = [['notas', 'hora_limite', 'TEXT'], ['notas', 'aviso_cant', 'INTEGER'], ['notas', 'aviso_unidad', 'TEXT']];
+const COLUMNAS_NUEVAS = [
+  ['notas', 'hora_limite', 'TEXT'], ['notas', 'aviso_cant', 'INTEGER'], ['notas', 'aviso_unidad', 'TEXT'],   // 1.1.0
+  ['notas', 'checklist', 'TEXT'], ['notas', 'repetir', 'TEXT'], ['notas', 'serie', 'TEXT'], ['notas', 'prio_antes', 'TEXT'], ['notas', 'fotos', 'TEXT'],   // 1.3.0
+];
 let schemaOk = false;
 async function ensureSchema(env) {
   if (schemaOk) return;
   await env.DB.batch(SCHEMA.map(q => env.DB.prepare(q)));
   const cols = new Set((await all(env, 'PRAGMA table_info(notas)')).map(c => c.name));
-  if (!cols.has('hora_limite')) {
-    for (const [tabla, col, tipo] of COLUMNAS_NUEVAS) {
-      if (!cols.has(col)) { try { await run(env, `ALTER TABLE ${tabla} ADD COLUMN ${col} ${tipo}`); } catch { /* otra instancia la añadió a la vez */ } }
-    }
-    await migrarAlarmas(env);
+  for (const [tabla, col, tipo] of COLUMNAS_NUEVAS) {
+    if (!cols.has(col)) { try { await run(env, `ALTER TABLE ${tabla} ADD COLUMN ${col} ${tipo}`); } catch { /* otra instancia la añadió a la vez */ } }
   }
+  if (!cols.has('hora_limite')) await migrarAlarmas(env);
   schemaOk = true;
 }
 
@@ -174,7 +175,95 @@ const setCfg = (env, clave, valor) =>
   run(env, 'INSERT INTO config (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor', clave, String(valor));
 
 // ---------- Notas ----------
-const NOTA_COLS = 'id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version';
+const NOTA_COLS = 'id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version, checklist, repetir, serie, prio_antes, fotos';
+
+// ---------- Notas recurrentes ----------
+// Al marcar realizada una nota que se repite se crea la siguiente, con id fijo (serie_fecha) para que la app,
+// el worker o dos dispositivos a la vez no la dupliquen. Solo existe la próxima repetición.
+const REPETIR = ['laborables', 'semanal', 'quincenal', 'mensual'];
+function fechaSiguiente(f, repetir) {
+  const d = new Date(f + 'T12:00:00Z');
+  if (repetir === 'laborables') { do d.setUTCDate(d.getUTCDate() + 1); while ([0, 6].includes(d.getUTCDay())); }
+  else if (repetir === 'semanal') d.setUTCDate(d.getUTCDate() + 7);
+  else if (repetir === 'quincenal') d.setUTCDate(d.getUTCDate() + 14);
+  else if (repetir === 'mensual') {
+    const dia = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + 1);
+    d.setUTCDate(Math.min(dia, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()));
+  }
+  return d.toISOString().slice(0, 10);
+}
+// Próxima repetición: desde su fecha límite, avanzando hasta hoy o después (si se marca con retraso).
+function proximaRepeticion(n) {
+  const hoy = partesMadrid(Date.now()).fecha;
+  let f = n.fecha_limite || hoy;
+  do f = fechaSiguiente(f, n.repetir); while (f < hoy);
+  const serie = n.serie || n.id;
+  return {
+    id: serie + '_' + f, serie, repetir: n.repetir, titulo: n.titulo, cuerpo: n.cuerpo || '',
+    prioridad: n.prio_antes || n.prioridad, persona_id: n.persona_id, fecha_limite: f, hora_limite: n.hora_limite,
+    aviso_unidad: n.aviso_unidad, aviso_cant: n.aviso_cant, duracion: n.duracion, subir_critica: n.subir_critica,
+    checklist: (n.checklist || []).map(p => ({ t: p.t, hecho: false })), etiquetas: n.etiquetas || [], origen: 'app',
+  };
+}
+
+// Checklist: lista de puntos [{ t, hecho }]. En la base se guarda como texto JSON; hacia fuera, como lista.
+const CHECK_MAX = 50;
+function limpiarChecklist(v) {
+  const lista = (Array.isArray(v) ? v : []).map(p => typeof p === 'string' ? { t: p } : p || {})
+    .map(p => ({ t: txt(p.t, 200).trim(), hecho: !!p.hecho })).filter(p => p.t).slice(0, CHECK_MAX);
+  return lista;
+}
+function leerChecklist(s) { try { return limpiarChecklist(JSON.parse(s || '[]')); } catch { return []; } }
+function leerFotos(s) { try { const l = JSON.parse(s || '[]'); return Array.isArray(l) ? l : []; } catch { return []; } }
+// Deja una nota leída de la base lista para enviarla (checklist y fotos como listas).
+const prepararNota = n => { n.checklist = leerChecklist(n.checklist); n.fotos = leerFotos(n.fotos); return n; };
+
+// ---------- Fotos (Cloudflare R2, binding FOTOS) ----------
+// Cada foto se guarda en dos tamaños que prepara la app: «mini» (miniatura) y «grande». La lista de la nota
+// (columna fotos) solo se toca desde estas rutas y no sube la versión, para no provocar conflictos al editar.
+const FOTOS_MAX = 12, FOTO_BYTES = 5 * 1024 * 1024, TIPOS_FOTO = ['mini', 'grande'];
+const claveFoto = (nota, foto, tipo) => `fotos/${nota}/${foto}-${tipo}.jpg`;
+function hayR2(env) { if (!env.FOTOS) throw new HttpError(500, 'Falta el almacén de fotos (R2) con el nombre FOTOS en el worker.'); }
+async function fotosDe(env, notaId) {
+  const n = await first(env, 'SELECT fotos FROM notas WHERE id = ? AND usuario_id = ?', notaId, USUARIO);
+  if (!n) throw new HttpError(404, 'La nota ya no existe.');
+  return leerFotos(n.fotos);
+}
+async function subirFoto(env, notaId, fotoId, tipo, request, url) {
+  hayR2(env);
+  if (!isId(fotoId) || !TIPOS_FOTO.includes(tipo)) throw new HttpError(400, 'Foto no válida.');
+  const lista = await fotosDe(env, notaId), existe = lista.some(f => f.id === fotoId);
+  if (!existe && lista.length >= FOTOS_MAX) throw new HttpError(400, `Una nota admite como máximo ${FOTOS_MAX} fotos.`);
+  const buf = await request.arrayBuffer();
+  if (!buf.byteLength) throw new HttpError(400, 'La foto está vacía.');
+  if (buf.byteLength > FOTO_BYTES) throw new HttpError(413, 'La foto es demasiado grande.');
+  await env.FOTOS.put(claveFoto(notaId, fotoId, tipo), buf, { httpMetadata: { contentType: 'image/jpeg' } });
+  if (tipo === 'grande' && !existe) {
+    const dim = k => Math.min(Math.max(parseInt(url.searchParams.get(k), 10) || 0, 0), 10000);
+    lista.push({ id: fotoId, ancho: dim('ancho'), alto: dim('alto'), creada: now() });
+    await run(env, 'UPDATE notas SET fotos = ? WHERE id = ?', JSON.stringify(lista), notaId);
+  }
+  return { fotos: lista };
+}
+async function quitarFoto(env, notaId, fotoId) {
+  hayR2(env);
+  const lista = (await fotosDe(env, notaId)).filter(f => f.id !== fotoId);
+  await env.FOTOS.delete(TIPOS_FOTO.map(t => claveFoto(notaId, fotoId, t)));
+  await run(env, 'UPDATE notas SET fotos = ? WHERE id = ?', lista.length ? JSON.stringify(lista) : null, notaId);
+  return { fotos: lista };
+}
+// Al borrar notas definitivamente, también sus fotos.
+async function borrarFotosDe(env, ids) {
+  if (!env.FOTOS) return;
+  for (const id of ids) {
+    let cursor;
+    do {
+      const r = await env.FOTOS.list({ prefix: `fotos/${id}/`, cursor });
+      if (r.objects.length) await env.FOTOS.delete(r.objects.map(o => o.key));
+      cursor = r.truncated ? r.cursor : undefined;
+    } while (cursor);
+  }
+}
 
 async function etiquetasDe(env, ids) {
   const mapa = {};
@@ -190,7 +279,7 @@ async function leerNota(env, id) {
   const n = await first(env, `SELECT ${NOTA_COLS} FROM notas WHERE id = ? AND usuario_id = ?`, id, USUARIO);
   if (!n) return null;
   n.etiquetas = (await all(env, 'SELECT etiqueta_id FROM nota_etiquetas WHERE nota_id = ?', id)).map(r => r.etiqueta_id);
-  return n;
+  return prepararNota(n);
 }
 
 async function limpiarCampos(env, b, parcial) {
@@ -202,7 +291,10 @@ async function limpiarCampos(env, b, parcial) {
   if (!parcial || 'cuerpo' in b) c.cuerpo = txt(b.cuerpo, 8000);
   if (!parcial || 'prioridad' in b) {
     c.prioridad = PRIORIDADES.includes(b.prioridad) ? b.prioridad : 'normal';
+    c.prio_antes = null;   // la prioridad elegida a mano anula la subida automática a Urgente
   }
+  if ('repetir' in b) c.repetir = REPETIR.includes(b.repetir) ? b.repetir : null;
+  if ('serie' in b) c.serie = isId(b.serie) ? b.serie : null;
   if ('persona_id' in b) c.persona_id = isId(b.persona_id) ? b.persona_id : null;
   if ('fecha_limite' in b) c.fecha_limite = fechaOk(b.fecha_limite) ? b.fecha_limite : null;
   if ('hora_limite' in b) c.hora_limite = horaOk(b.hora_limite) ? b.hora_limite : null;
@@ -216,6 +308,7 @@ async function limpiarCampos(env, b, parcial) {
   if ('alarma' in b) c.alarma = isoOk(b.alarma) ? new Date(b.alarma).toISOString() : null;
   if ('subir_critica' in b) c.subir_critica = b.subir_critica ? 1 : 0;
   if ('duracion' in b) c.duracion = Number.isInteger(b.duracion) && b.duracion > 0 && b.duracion <= 1440 ? b.duracion : null;
+  if ('checklist' in b) { const l = limpiarChecklist(b.checklist); c.checklist = l.length ? JSON.stringify(l) : null; }
   if ('estado' in b) {
     if (!ESTADOS.includes(b.estado)) throw new HttpError(400, 'Estado no válido.');
     c.estado = b.estado;
@@ -263,7 +356,8 @@ async function crearNota(env, b, dispositivo) {
     id, usuario_id: USUARIO, titulo: c.titulo, cuerpo: c.cuerpo || '', prioridad: c.prioridad, estado: c.estado,
     persona_id: c.persona_id || null, fecha_limite: c.fecha_limite || null, hora_limite: c.hora_limite || null,
     aviso_cant: c.aviso_cant || null, aviso_unidad: c.aviso_unidad || null, alarma: c.alarma || null, alarma_enviada: 0,
-    subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null,
+    subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null, checklist: c.checklist || null,
+    repetir: c.repetir || null, serie: c.serie || null,
     origen: ['manual', 'voz', 'app'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
     transcripcion: b.transcripcion ? txt(b.transcripcion, 20000) : null,
     creada: t, actualizada: t, realizada_en: c.realizada_en || null, eliminada_en: c.eliminada_en || null, borrar_en: c.borrar_en || null,
@@ -294,9 +388,20 @@ async function editarNota(env, ctx, id, b, dispositivo) {
   if (Array.isArray(b.etiquetas)) await ponerEtiquetas(env, id, b.etiquetas);
   await run(env, 'INSERT INTO cambios (nota_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?)',
     id, t, dispositivo, c.estado && c.estado !== antes.estado ? 'estado:' + c.estado : 'editar', JSON.stringify(antes));
+  await seguirSerie(env, antes, c.estado, dispositivo);
   // Si el aviso ya se mostró y la nota se ha resuelto o reprogramado, se retira de los demás dispositivos.
   if (antes.alarma_enviada && (c.estado && c.estado !== 'activa' || 'alarma' in c)) ctx.waitUntil(cerrarAvisos(env, id, null));
   return leerNota(env, id);
+}
+
+// Nota recurrente: al realizarla se crea la siguiente; al deshacer, se quita la siguiente si nadie la ha tocado.
+async function seguirSerie(env, antes, estado, dispositivo) {
+  if (!antes.repetir || !estado || estado === antes.estado) return;
+  if (estado === 'realizada' && antes.estado === 'activa') await crearNota(env, proximaRepeticion(antes), dispositivo);
+  if (estado === 'activa' && antes.estado === 'realizada') {
+    const sig = await leerNota(env, proximaRepeticion(antes).id);
+    if (sig && sig.version === 1 && sig.estado === 'activa') await borrarDefinitivo(env, [sig.id]);
+  }
 }
 
 async function accionAlarma(env, ctx, id, b, dispositivo) {
@@ -307,6 +412,7 @@ async function accionAlarma(env, ctx, id, b, dispositivo) {
     efectosEstado(c, n);
     await run(env, 'UPDATE notas SET estado = ?, realizada_en = ?, eliminada_en = NULL, borrar_en = ?, aviso30 = 0, aviso7 = 0, actualizada = ?, version = version + 1 WHERE id = ?',
       'realizada', c.realizada_en, c.borrar_en, now(), id);
+    await seguirSerie(env, n, 'realizada', dispositivo);
   } else if (b.accion === 'posponer') {
     const min = Math.min(Math.max(parseInt(b.minutos, 10) || 10, 1), 24 * 60);
     await run(env, 'UPDATE notas SET alarma = ?, alarma_enviada = 0, actualizada = ?, version = version + 1 WHERE id = ?',
@@ -384,7 +490,7 @@ async function guardarVista(env, id, b) {
 async function leerDatos(env) {
   const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE usuario_id = ? ORDER BY creada`, USUARIO);
   const mapa = await etiquetasDe(env, notas.map(n => n.id));
-  for (const n of notas) n.etiquetas = mapa[n.id] || [];
+  for (const n of notas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
   const etiquetas = await all(env, 'SELECT id, nombre, tipo, alias, cerrada, cerrada_en FROM etiquetas WHERE usuario_id = ? ORDER BY nombre', USUARIO);
   const personas = await all(env, 'SELECT id, nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', USUARIO);
   const vistas = (await all(env, 'SELECT id, nombre, filtro, orden FROM vistas WHERE usuario_id = ? ORDER BY orden', USUARIO))
@@ -406,7 +512,7 @@ function informeHtml(titulo, notas, etiquetas, personas) {
   const filas = notas.map(n => `
     <tr>
       <td>${esc(PRIO_NOMBRE[n.prioridad] || n.prioridad)}</td>
-      <td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}</td>
+      <td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}${(n.checklist || []).map(p => '<br>' + (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('')}${(n.fotos || []).length ? `<br>📷 ${n.fotos.length} ${n.fotos.length === 1 ? 'foto' : 'fotos'}` : ''}</td>
       <td>${(n.etiquetas || []).map(id => '#' + esc(eMap[id] || '')).join(' ')}</td>
       <td>${esc(pMap[n.persona_id] || '')}</td>
       <td>${esc(n.estado === 'realizada' ? 'Realizada ' + fechaEs(n.realizada_en) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente')}
@@ -432,7 +538,7 @@ async function guardarArchivo(env, titulo, motivo, notas) {
 async function archivarEtiqueta(env, etiquetaId, nombre, motivo) {
   const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE id IN (SELECT nota_id FROM nota_etiquetas WHERE etiqueta_id = ?) ORDER BY creada`, etiquetaId);
   const mapa = await etiquetasDe(env, notas.map(n => n.id));
-  for (const n of notas) n.etiquetas = mapa[n.id] || [];
+  for (const n of notas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
   return guardarArchivo(env, 'Notas de #' + nombre, motivo, notas);
 }
 
@@ -450,6 +556,8 @@ Reglas:
 - fecha_limite (AAAA-MM-DD): cuando se diga para cuándo hay que hacerlo, o el día en que se pide un aviso o recordatorio. Calcula las fechas relativas ("el jueves", "la semana que viene") a partir de la fecha actual que se indica.
 - hora_limite (HH:MM, 24 h, hora local): solo si se dice una hora concreta ("a las 10", "a las 4 de la tarde" → 16:00). Si se dice una hora sin día, la fecha límite es hoy, o mañana si esa hora ya ha pasado. A la hora límite la app avisa siempre; no hace falta pedirlo.
 - aviso_unidad (h, d o s) y aviso_cant: solo si se pide que avise con antelación ("avísame un día antes" → d y 1; "dos horas antes" → h y 2; "una semana antes" → s y 1). Horas de 1 a 12, días de 1 a 7, semanas de 1 a 4. Si no se pide, unidad vacía y 0.
+- checklist: solo si se enumeran pasos o elementos concretos que hay que ir marcando ("pedir oferta a tres industriales: Puertas Vidal, Carpintería Roca y Alumisa" → un punto por industrial). Textos cortos. Si no, vacío.
+- repetir: solo si se dice que se repite: laborables ("cada día", "todos los días laborables"), semanal ("cada lunes", "todas las semanas"), quincenal ("cada dos semanas"), mensual ("cada mes", "el día 5 de cada mes"). Pon también la fecha límite de la primera vez. Si no, vacío.
 - duracion (minutos): solo si se dice cuánto va a durar ("reunión de una hora"). Si no, 0.
 - Deja vacíos los campos que no se mencionen.`;
 
@@ -475,6 +583,8 @@ const TOOL = {
             hora_limite: { type: 'string' },
             aviso_unidad: { type: 'string', enum: ['', 'h', 'd', 's'] },
             aviso_cant: { type: 'integer' },
+            checklist: { type: 'array', items: { type: 'string' } },
+            repetir: { type: 'string', enum: ['', ...REPETIR] },
             duracion: { type: 'integer' },
           },
           required: ['titulo', 'cuerpo', 'prioridad', 'etiquetas'],
@@ -546,6 +656,8 @@ async function analizar(env, b) {
       aviso_unidad: fechaOk(n.fecha_limite) && avisoOk(n.aviso_unidad, n.aviso_cant) ? n.aviso_unidad : '',
       aviso_cant: fechaOk(n.fecha_limite) && avisoOk(n.aviso_unidad, n.aviso_cant) ? n.aviso_cant : 0,
       duracion: Number.isInteger(n.duracion) && n.duracion > 0 ? Math.min(n.duracion, 1440) : 0,
+      checklist: limpiarChecklist(n.checklist).map(p => p.t),
+      repetir: REPETIR.includes(n.repetir) ? n.repetir : '',
     };
   });
   return { notas, uso: data.usage || null };
@@ -666,7 +778,8 @@ async function enviarAlarmas(env) {
 
 async function subirPrioridades(env) {
   const manana = new Date(Date.now() + DIA).toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
-  await run(env, `UPDATE notas SET prioridad = 'critica', actualizada = ?, version = version + 1
+  // prio_antes guarda la prioridad elegida, para que la siguiente repetición no nazca ya como Urgente.
+  await run(env, `UPDATE notas SET prio_antes = prioridad, prioridad = 'critica', actualizada = ?, version = version + 1
     WHERE estado = 'activa' AND subir_critica = 1 AND prioridad != 'critica' AND fecha_limite IS NOT NULL AND fecha_limite <= ?`, now(), manana);
 }
 
@@ -684,7 +797,7 @@ async function tareaDiaria(env) {
   const caducadas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE estado = 'realizada' AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA} ORDER BY realizada_en`, t);
   if (caducadas.length) {
     const mapa = await etiquetasDe(env, caducadas.map(n => n.id));
-    for (const n of caducadas) n.etiquetas = mapa[n.id] || [];
+    for (const n of caducadas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
     const hoy = new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
     await guardarArchivo(env, 'Notas realizadas borradas el ' + hoy, 'Más de un año desde que se realizaron', caducadas);
     await borrarDefinitivo(env, caducadas.map(n => n.id));
@@ -712,6 +825,7 @@ async function tareaDiaria(env) {
 }
 
 async function borrarDefinitivo(env, ids) {
+  await borrarFotosDe(env, ids);
   for (let i = 0; i < ids.length; i += 90) {
     const trozo = ids.slice(i, i + 90), q = trozo.map(() => '?').join(',');
     await env.DB.batch([
@@ -791,6 +905,7 @@ export default {
         const faltan = [];
         if (!env.AI) faltan.push('Enlace de Workers AI (AI)');
         if (!env.ANTHROPIC_API_KEY) faltan.push('ANTHROPIC_API_KEY');
+        if (!env.FOTOS) faltan.push('Almacén de fotos R2 (FOTOS)');
         return json({ ok: true, faltan, version: 1 });
       }
       if (M === 'GET' && path === '/datos') return json(await leerDatos(env));
@@ -810,6 +925,17 @@ export default {
         if (!isId(id)) return json({ error: 'Nota no válida.' }, 400);
         if (M === 'PUT' && parts.length === 2) return json({ nota: await editarNota(env, ctx, id, await readJson(request), disp) });
         if (M === 'POST' && parts[2] === 'alarma') return json({ nota: await accionAlarma(env, ctx, id, await readJson(request), disp) });
+        // Fotos: /notas/:id/fotos/:foto/:tipo (subir y ver) y /notas/:id/fotos/:foto (quitar)
+        if (parts[2] === 'fotos' && parts[3]) {
+          if (M === 'POST' && parts[4]) return json(await subirFoto(env, id, parts[3], parts[4], request, url));
+          if (M === 'DELETE' && parts.length === 4) return json(await quitarFoto(env, id, parts[3]));
+          if (M === 'GET' && TIPOS_FOTO.includes(parts[4])) {
+            hayR2(env);
+            const o = await env.FOTOS.get(claveFoto(id, parts[3], parts[4]));
+            if (!o) return json({ error: 'La foto ya no existe.' }, 404);
+            return new Response(o.body, { headers: { ...cors, 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' } });
+          }
+        }
         if (M === 'DELETE' && parts.length === 2) {
           const n = await leerNota(env, id);
           if (n && n.estado !== 'papelera') return json({ error: 'Solo se pueden borrar definitivamente las notas de la papelera.' }, 400);
