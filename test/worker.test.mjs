@@ -47,6 +47,8 @@ let r = await mf.dispatchFetch('http://w/datos', { headers: { Authorization: 'Be
 ok(r.status === 401, 'token incorrecto rechazado');
 
 r = await call('GET', '/estado'); ok(r.s === 200 && r.d.faltan.includes('Enlace de Workers AI (AI)'), 'estado avisa de que falta AI');
+ok(r.d.api >= 3, 'estado indica la versión de la API (la app detecta workers antiguos)');
+r = await call('GET', '/datos'); ok(r.d.api >= 3, 'datos indica la versión de la API');
 
 // Etiquetas y personas
 r = await call('POST', '/etiquetas', { id: 'et_mallorca', nombre: 'Mallorca245', tipo: 'obra', alias: 'Mallorca' }); ok(r.s === 200 && r.d.etiqueta.nombre === 'Mallorca245', 'crear etiqueta');

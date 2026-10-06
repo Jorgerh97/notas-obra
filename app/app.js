@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,6 +20,7 @@ const AVISO_RANGO = { h: 12, d: 7, s: 4 };   // horas, días o semanas antes (de
 const AVISO_N = { h: ['hora', 'horas'], d: ['día', 'días'], s: ['semana', 'semanas'] };
 const HORA_AVISO = '08:00';                  // hora de los avisos cuando la fecha límite no tiene hora
 const CAMPOS_AVISO = ['fecha_limite', 'hora_limite', 'aviso_cant', 'aviso_unidad'];
+const API_MIN = 3;   // versión mínima del worker (ver API en worker.js)
 const MODOS = [['lista', 'Lista'], ['calendario', 'Calendario'], ['matriz', 'Matriz']];
 const DURACIONES = [[10, '10 min'], [30, '30 min'], [60, '1 h'], [120, '2 h']];
 const DURACION_DEF = 10;   // minutos; las notas sin duración ocupan esto en el calendario
@@ -272,6 +273,7 @@ async function sincronizar() {
     const d = await api('/datos');
     if (S.outbox.length) return;   // hubo cambios mientras llegaban los datos
     S.notas = d.notas; S.etiquetas = d.etiquetas; S.personas = d.personas; S.vistas = d.vistas; S.srv = d.config || {};
+    S.workerAntiguo = !(d.api >= API_MIN);
     for (const n of S.notas) n.fotos = conFotosPendientes(n.id, n.fotos || []);   // las que aún no han subido
     if (S.ui.vista && !S.vistas.some(v => v.id === S.ui.vista)) { S.ui.vista = null; S.ui.filtro = filtroVacio(); }
     await guardarLocal();
@@ -705,6 +707,7 @@ function renderBase() {
   const cur = S.ui.vista || '';
   const banners = [];
   if (!S.cfg.url || !S.cfg.token) banners.push(`<div class="banner warn"><span class="grow"><b>Conecta la app con tu worker</b> para guardar las notas en la nube.</span><a class="btn small" href="#/ajustes">Abrir Ajustes</a></div>`);
+  if (S.workerAntiguo) banners.push(`<div class="banner bad"><span class="grow"><b>Este dispositivo está conectado a un worker antiguo.</b> No se guardan la hora, el checklist, la repetición ni las fotos. Cambia la URL del worker en Ajustes.</span><a class="btn small" href="#/ajustes">Abrir Ajustes</a></div>`);
   if (S.conflictos.length) banners.push(`<div class="banner bad"><span class="grow"><b>${S.conflictos.length === 1 ? 'Una nota se ha editado' : S.conflictos.length + ' notas se han editado'} en dos dispositivos a la vez.</b> Elige qué versión conservar.</span><a class="btn small" href="#/conflicto">Resolver</a></div>`);
   const pend = S.audios.filter(a => a.estado === 'pendiente' || a.estado === 'error' || a.estado === 'transcrito');
   if (pend.length) banners.push(`<div class="banner warn"><span class="grow"><b>${pend.length === 1 ? 'Tienes 1 audio' : 'Tienes ' + pend.length + ' audios'} sin analizar.</b> Se guardaron sin conexión o falló el análisis.</span><a class="btn small" href="#/dictado">Ver audios</a></div>`);
@@ -933,7 +936,7 @@ function calSemana(notas) {
   });
   const cabecera = datos.map(d => { const x = new Date(d.f + 'T12:00');
     return `<div class="cal-dh ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}"><b>${DIAS_LARGOS[(x.getDay() + 6) % 7].slice(0, 3)} ${x.getDate()}${d.hoy ? ' · Hoy' : ''}</b><span>Libre: <b>${fmtLibre(d.libre)}</b></span></div>`; }).join('');
-  const limites = datos.map(d => `<div class="cal-due ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" data-sinhora="1">
+  const limites = datos.map(d => `<div class="cal-due ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" data-sinhora="1" data-act="cal-nueva" title="Pulsa para crear una nota con esta fecha, sin hora">
     ${d.delDia.filter(n => !n.hora_limite).sort((a, b) => rankPrio(a.prioridad) - rankPrio(b.prioridad)).map(n => `<button class="cal-chip p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)} title="${esc(n.titulo)}">${esc(n.titulo)}</button>`).join('')}</div>`).join('');
   const horas = Array.from({ length: fin - ini }, (_, i) => `<span style="top:${i * CAL_HH + 2}px">${ini + i}:00</span>`).join('');
   const columnas = datos.map(d => {
@@ -949,7 +952,7 @@ function calSemana(notas) {
         <b>${fuera}${esc(n.hora_limite)}</b> <span class="t">${esc(n.titulo)}</span> <span class="d">· ${textoDuracion(dur)}${textoAviso(n) ? ' 🔔' : ''}${n.repetir ? ' ↻' : ''}</span>${n.estado === 'activa' ? '<span class="cal-asa" data-estirar aria-hidden="true"></span>' : ''}</button>`;
     }).join('');
     const linea = d.hoy && minAhora >= vis0 && minAhora < vis1 ? `<div class="cal-ahora" style="top:${(minAhora - vis0) / 60 * CAL_HH}px"></div>` : '';
-    return `<div class="cal-col ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" style="height:${alto}px">${bloques}${linea}</div>`;
+    return `<div class="cal-col ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" data-act="cal-nueva" title="Pulsa en un hueco para crear una nota a esa hora" style="height:${alto}px">${bloques}${linea}</div>`;
   }).join('');
   return `<div class="cal-semana">
     <div class="cal-fila" style="grid-template-columns:${cols}"><span></span>${cabecera}</div>
@@ -967,7 +970,7 @@ function calMes(notas) {
     const lista = notas.filter(n => n.fecha_limite === f)
       .sort((a, b) => (a.hora_limite ? 0 : 1) - (b.hora_limite ? 0 : 1) || String(a.hora_limite).localeCompare(String(b.hora_limite)) || rankPrio(a.prioridad) - rankPrio(b.prioridad));
     return `<div class="cal-dia carga${cargaDia(notas, f)} ${mm !== m ? 'fuera' : ''} ${f === hoy ? 'hoy' : ''}" data-drop="cal" data-fecha="${f}" data-act="cal-dia" data-v="${f}">
-      <span class="num">${dd}</span>
+      <span class="num">${dd}<button class="cal-mas-nota" data-act="cal-nueva" data-fecha="${f}" aria-label="Nueva nota el ${esc(diaLargo(f))}" title="Nueva nota este día">+</button></span>
       ${lista.slice(0, 2).map(n => `<button class="cal-mi p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}><i class="dot"></i>${n.hora_limite ? esc(n.hora_limite) + ' ' : ''}${esc(n.titulo)}</button>`).join('')}
       ${lista.length > 2 ? `<button class="cal-mas" data-act="cal-dia" data-v="${f}">+${lista.length - 2} más</button>` : ''}
     </div>`;
@@ -1027,7 +1030,7 @@ function calMovil(notas, atrasadas, grupo) {
   const cerrarVacios = () => {
     if (!vacios.length) return;
     const a = vacios[0], b = vacios[vacios.length - 1];
-    bloques.push(`<section class="calm-dia-sec"><div class="calm-vacio">${esc(mayus(sinMes(a)))}${a !== b ? ' – ' + esc(mayus(sinMes(b))) : ''} · Sin notas · hueco disponible</div></section>`);
+    bloques.push(`<section class="calm-dia-sec"><div class="calm-vacio"><span class="grow">${esc(mayus(sinMes(a)))}${a !== b ? ' – ' + esc(mayus(sinMes(b))) : ''} · Sin notas · hueco disponible</span><button class="calm-mas" data-act="cal-nueva" data-fecha="${a}" aria-label="Nueva nota el ${esc(diaLargo(a))}">+ Nota</button></div></section>`);
     vacios = [];
   };
   for (const f of visibles) {
@@ -1036,7 +1039,7 @@ function calMovil(notas, atrasadas, grupo) {
     if (!lista.length) { vacios.push(f); continue; }
     cerrarVacios();
     const pend = lista.filter(n => n.estado === 'activa').length;
-    bloques.push(`<section class="calm-dia-sec" id="calm-${f}"><div class="calm-dia-t ${f === hoy ? 'hoy' : ''}"><h2>${esc(etiquetaDia(f))}</h2><span>${pend === 1 ? '1 nota' : pend + ' notas'}</span></div>
+    bloques.push(`<section class="calm-dia-sec" id="calm-${f}"><div class="calm-dia-t ${f === hoy ? 'hoy' : ''}"><h2>${esc(etiquetaDia(f))}</h2><span>${pend === 1 ? '1 nota' : pend + ' notas'}</span><button class="calm-mas" data-act="cal-nueva" data-fecha="${f}" aria-label="Nueva nota el ${esc(diaLargo(f))}">+ Nota</button></div>
       ${lista.map(n => { const e = (n.etiquetas || []).map(etq).filter(Boolean)[0];
         return `<button class="calm-item p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}">
           <span class="calm-cuando">${n.hora_limite ? esc(n.hora_limite) + (textoAviso(n) ? ' 🔔' : '') : '⚑ Límite'}</span>
@@ -1295,10 +1298,18 @@ function iniciarEditor(id) {
     ruta: ruta(), id: n ? n.id : null,
     d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
         aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: '', hora_limite: '', aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
+      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
+        aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
     sug: null, sel: 0,
   };
+  S.prefill = null;   // fecha y hora elegidas en el calendario: solo valen para esta nota nueva
+}
+// Nueva nota con la fecha (y la hora) donde se ha pulsado en el calendario.
+function nuevaNotaEn(fecha, horaLimite) {
+  S.prefill = { fecha_limite: fecha, hora_limite: horaLimite || '' };
+  S.ed = null;
+  location.hash = '#/nota/nueva';
 }
 // Una nota nueva hereda las etiquetas del grupo o filtro que estás viendo.
 function preEtiquetas() { return S.ui.filtro.modo !== 'alguna' ? [...S.ui.filtro.etiquetas] : []; }
@@ -1327,7 +1338,7 @@ function vistaEditor() {
     </label>
     <div class="grid2">
       <label class="field"><span>Fecha límite</span><input class="input" type="date" data-ed="fecha_limite" value="${esc(d.fecha_limite)}"></label>
-      <label class="field"><span>Hora <small>(opcional)</small></span><input class="input" type="time" data-ed="hora_limite" value="${esc(d.hora_limite)}"></label>
+      <div class="field"><span class="field-label">Hora <small>(opcional)</small></span>${selectorHora(d.hora_limite, 'ed')}</div>
     </div>
     ${bloqueAvisos(d)}
     <div class="field"><span class="field-label">Duración <small>(opcional · ocupa hueco en el calendario)</small></span>
@@ -1379,6 +1390,23 @@ function camposFecha(d) {
   return { repetir: d.repetir || null, fecha_limite: f, hora_limite: f && d.hora_limite ? d.hora_limite : null, aviso_unidad: u, aviso_cant: u ? Math.min(Number(d.aviso_cant) || 1, AVISO_RANGO[u]) : null };
 }
 
+// Hora con dos desplegables (hora y minutos de 5 en 5). A diferencia del campo de hora del navegador,
+// no puede quedarse a medias («08:--»), que se guardaba como «sin hora» sin avisar.
+// destino: 'ed' (editor) o el número de la propuesta del dictado.
+function selectorHora(valor, destino) {
+  const [h, m] = (valor || '').split(':');
+  const mins = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0'));
+  if (m && !mins.includes(m)) mins.push(m), mins.sort();   // horas antiguas con minutos sueltos (07:32)
+  return `<span class="hora-pick" data-hora="${destino}">
+    <select class="input" data-hora-parte="h" aria-label="Hora"><option value="">—</option>${Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0')).map(x => `<option value="${x}" ${x === h ? 'selected' : ''}>${x}</option>`).join('')}</select>
+    <b>:</b>
+    <select class="input" data-hora-parte="m" aria-label="Minutos" ${h ? '' : 'disabled'}>${mins.map(x => `<option value="${x}" ${x === (m || '00') ? 'selected' : ''}>${x}</option>`).join('')}</select></span>`;
+}
+function leerSelectorHora(t) {
+  const c = t.closest('.hora-pick'), h = c.querySelector('[data-hora-parte="h"]').value, ms = c.querySelector('[data-hora-parte="m"]');
+  ms.disabled = !h;
+  return { destino: c.dataset.hora, valor: h ? h + ':' + (ms.value || '00') : '' };
+}
 // Explica qué pasará al realizar una nota que se repite.
 function pistaRepetir(d) {
   if (!d.repetir) return '<small class="hint" id="ed-repetir"></small>';
@@ -1779,7 +1807,7 @@ function tarjetaPropuesta(p, i) {
       <button class="btn small link" data-act="p-nueva" data-p="${i}" data-n="${esc(n.nombre)}" data-v="descartar">Descartar</button></div></div>`).join('')}
     <div class="grid2">
       <label class="field"><small>Fecha límite</small><input class="input" type="date" data-p="${i}" data-f="fecha_limite" value="${esc(p.fecha_limite)}"></label>
-      <label class="field"><small>Hora</small><input class="input" type="time" data-p="${i}" data-f="hora_limite" value="${esc(p.hora_limite)}"></label>
+      <div class="field"><small>Hora</small>${selectorHora(p.hora_limite, String(i))}</div>
     </div>
     <div class="grid2">
       <label class="field"><small>Asignar a</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">Nadie</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
@@ -2017,8 +2045,9 @@ async function guardarConexion() {
   res.textContent = 'Probando…';
   try {
     const r = await api('/estado');
-    res.textContent = r.faltan && r.faltan.length ? 'Conectado, pero falta configurar en el worker: ' + r.faltan.join(', ') + '. Sin eso no funcionará el dictado.' : 'Conexión correcta. Todo listo.';
-    res.style.color = r.faltan && r.faltan.length ? 'var(--orange-ink)' : 'var(--primary)';
+    res.textContent = !(r.api >= API_MIN) ? 'Conectado, pero este worker es una versión antigua: no guarda la hora, el checklist, la repetición ni las fotos. Revisa la URL: la correcta acaba en «notas-obra….workers.dev».'
+      : r.faltan && r.faltan.length ? 'Conectado, pero falta configurar en el worker: ' + r.faltan.join(', ') + '.' : 'Conexión correcta. Todo listo.';
+    res.style.color = !(r.api >= API_MIN) ? 'var(--red)' : r.faltan && r.faltan.length ? 'var(--orange-ink)' : 'var(--primary)';
     await sincronizar();
     cargarDispositivos();
   } catch (e) {
@@ -2147,6 +2176,19 @@ const ACT = {
     if (c.vista === 'mes') { const [y, m] = c.ref.split('-').map(Number); c.ref = ymd(new Date(y, m - 1 + k, 1)); }
     else c.ref = addDias(c.ref, 7 * k);
     renderBase();
+  },
+  // Pulsar un hueco del calendario crea una nota ahí: en la rejilla de la Semana con la hora pulsada
+  // (pasos de 15 min, como al arrastrar); en la fila «⚑ Fecha límite» o con el «+» de un día, solo con la fecha.
+  'cal-nueva': (el, ev) => {
+    const f = el.dataset.fecha; if (!f) return;
+    let h = '';
+    if (el.classList.contains('cal-col') && ev) {
+      const [ini, fin] = calHorario(), r = el.getBoundingClientRect();
+      let m = ini * 60 + Math.floor((ev.clientY - r.top) / CAL_HH * 60 / 15) * 15;
+      m = Math.min(Math.max(m, ini * 60), fin * 60 - 15);
+      h = pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
+    }
+    nuevaNotaEn(f, h);
   },
   // Un día del mes (o del mes pequeño) abre su semana.
   'cal-dia': (el) => { const c = cal(); c.ref = el.dataset.v; c.vista = 'semana'; guardarUi(); renderBase(); },
@@ -2399,6 +2441,12 @@ document.addEventListener('input', ev => {
   const t = ev.target;
   if (t.id === 'q' || t.id === 'qm') { S.ui.q = t.value; clearTimeout(S._qt); S._qt = setTimeout(() => { const pos = t.selectionStart, id = t.id; renderBase(); const n = $('#' + id); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 200); return; }
   if (t.id === 'hq') { S.ui.histQ = t.value; clearTimeout(S._hq); S._hq = setTimeout(() => { const pos = t.selectionStart; renderOverlay(); const n = $('#hq'); if (n) { n.focus(); n.setSelectionRange(pos, pos); } }, 250); return; }
+  if (t.dataset.horaParte) {
+    const { destino, valor } = leerSelectorHora(t);
+    if (destino === 'ed' && S.ed) { S.ed.d.hora_limite = valor; pintarAvisos(); }
+    else if (S.dic && S.dic.propuestas[destino]) S.dic.propuestas[destino].hora_limite = valor;
+    return;
+  }
   if (S.ed && t.dataset.chkT != null) { S.ed.d.checklist[Number(t.dataset.chkT)].t = t.value; return; }
   if (S.ed && t.dataset.chk != null) { S.ed.d.checklist[Number(t.dataset.chk)].hecho = t.checked; pintarChecklist(); return; }
   if (t.dataset.ed && S.ed) {

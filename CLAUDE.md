@@ -62,6 +62,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **Fase 1**: hecha (este código).
 - **Fase 2**: hecha en la versión 1.2.0 (calendario, matriz, arrastres, duración y resumen matutino → `docs/FASE2.md`). Modo Lista/Calendario/Matriz en `S.ui.modo`; arrastres con Pointer Events en el objeto `SOLTAR` (tipos `prio` y `cal`); config compartida `cal_inicio`/`cal_fin` y `resumen_activo`/`resumen_hora`/`resumen_dias`; resumen enviado por `resumenMatutino()` en el cron.
 - **Fase 3**: hecha en la versión 1.3.0 (checklists, notas recurrentes, PDF para reunión y fotos en R2 → `docs/FASE3.md`). Columnas nuevas `checklist`, `repetir`, `serie`, `prio_antes`, `fotos`; la siguiente repetición se crea con id `serie_fecha` (`proximaRepeticion` en worker y app); fotos en el bucket R2 `notas-obra-fotos` (binding `FOTOS`), cola local `fotos-pend` en IndexedDB. Descartados por Jorge: nota → borrador de Gmail y conexión con «Visitas de obra».
+- **1.3.1** (6 oct 2026): hora con desplegables (minutos de 5 en 5), crear nota pulsando en el calendario y aviso de worker antiguo → `docs/PENDIENTE.md`. Existe un worker antiguo `proud-salad-c6ba` con la misma base D1: no usarlo; borrarlo solo con confirmación de Jorge.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

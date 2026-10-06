@@ -36,6 +36,8 @@
 //   DB  Base de datos D1 "notas-obra-db".
 
 const DEFAULT_MODEL = 'claude-sonnet-5';
+// Versión de la API. La app avisa si el worker no la indica (worker antiguo que no guarda hora, checklist ni fotos).
+const API = 3;
 const WHISPER = '@cf/openai/whisper-large-v3-turbo';
 const MAX_AUDIO = 15 * 1024 * 1024;
 const DIA = 86400000;
@@ -497,7 +499,7 @@ async function leerDatos(env) {
     .map(v => ({ ...v, filtro: JSON.parse(v.filtro || '{}') }));
   const config = {};
   for (const r of await all(env, `SELECT clave, valor FROM config WHERE clave IN (${CONFIG_PUBLICA.map(() => '?').join(',')})`, ...CONFIG_PUBLICA)) config[r.clave] = r.valor;
-  return { notas, etiquetas, personas, vistas, config, ahora: now() };
+  return { notas, etiquetas, personas, vistas, config, ahora: now(), api: API };
 }
 
 // ---------- Informes archivados ----------
@@ -906,7 +908,7 @@ export default {
         if (!env.AI) faltan.push('Enlace de Workers AI (AI)');
         if (!env.ANTHROPIC_API_KEY) faltan.push('ANTHROPIC_API_KEY');
         if (!env.FOTOS) faltan.push('Almacén de fotos R2 (FOTOS)');
-        return json({ ok: true, faltan, version: 1 });
+        return json({ ok: true, faltan, version: 1, api: API });
       }
       if (M === 'GET' && path === '/datos') return json(await leerDatos(env));
 
