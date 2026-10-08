@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -113,7 +113,7 @@ const S = {
   cfg: { url: '', token: '', dispositivo: '', pushEndpoint: '' },
   notas: [], etiquetas: [], personas: [], vistas: [], srv: {},
   outbox: [], conflictos: [], audios: [],
-  ui: { modo: 'lista', grupoVista: '', matrizMas: {}, cal: { vista: 'semana', ref: '', realizadas: true, finde: true }, agrupar: 'fecha', vista: null, filtro: filtroVacio(), q: '', buscar: false, histTab: 'realizadas', histQ: '' },
+  ui: { modo: 'lista', matrizMas: {}, cal: { vista: 'semana', ref: '', realizadas: true, finde: true }, agrupar: 'fecha', vista: null, filtro: filtroVacio(), q: '', buscar: false, histTab: 'realizadas', histQ: '' },
   sync: { estado: 'local', msg: '' },
   flushing: false,
   ed: null, dic: null, rev: null, modal: null,
@@ -133,7 +133,7 @@ async function guardarLocal() {
 const guardarOutbox = () => idb.set('outbox', { outbox: S.outbox, conflictos: S.conflictos });
 const guardarCfg = () => idb.set('config', S.cfg);
 const guardarAudios = () => idb.set('audios', S.audios);
-const guardarUi = () => idb.set('ui', { modo: S.ui.modo, grupoVista: S.ui.grupoVista, cal: { vista: S.ui.cal.vista, realizadas: S.ui.cal.realizadas, finde: S.ui.cal.finde }, agrupar: S.ui.agrupar, vista: S.ui.vista, filtro: S.ui.filtro });
+const guardarUi = () => idb.set('ui', { modo: S.ui.modo, cal: { vista: S.ui.cal.vista, realizadas: S.ui.cal.realizadas, finde: S.ui.cal.finde }, agrupar: S.ui.agrupar, vista: S.ui.vista, filtro: S.ui.filtro });
 
 // ---------- Conexión con el worker ----------
 async function api(path, opt = {}) {
@@ -663,7 +663,7 @@ function textoCuando(n) {
 function filaNota(n) {
   const tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
   const p = per(n.persona_id);
-  return `<article class="nota p-${n.prioridad}" data-id="${esc(n.id)}">
+  return `<article class="nota p-${n.prioridad}" data-id="${esc(n.id)}" data-drag="lista" data-titulo="${esc(n.titulo)}" data-cuando="${esc(cuandoCorto(n).t)}">
     <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
     <button class="n-main" data-act="abrir" data-id="${esc(n.id)}">
       <span class="n-prio"><i class="dot"></i>${PRIO_N[n.prioridad]}</span>
@@ -675,6 +675,8 @@ function filaNota(n) {
 }
 
 function nombreVista() {
+  const r = responsableActivo();
+  if (r) return 'Responsable: ' + ((per(r) || {}).nombre || '?');
   if (!S.ui.vista) return filtroActivo(S.ui.filtro) ? 'Notas filtradas' : 'Todas las notas';
   const v = S.vistas.find(x => x.id === S.ui.vista);
   return v ? v.nombre : 'Todas las notas';
@@ -730,13 +732,14 @@ function renderBase() {
   </header>
   ${S.ui.buscar ? `<div class="mob-only" style="padding:8px 16px 0"><label class="search">${ICON.search}<input id="qm" type="search" placeholder="Buscar" value="${esc(S.ui.q)}" aria-label="Buscar"><button class="icon-btn" data-act="cerrar-buscar" aria-label="Cerrar búsqueda" style="width:34px;height:34px">${ICON.close}</button></label></div>` : ''}
   <div class="layout">
-    <nav class="sidebar" aria-label="${S.ui.modo === 'calendario' ? 'Opciones del calendario' : 'Grupos filtrados'}">
-      ${S.ui.modo === 'calendario' ? `<div class="side-groups">${calLateral()}</div>` : `
-      ${sideItem(sidebarItems[0], cur)}
-      <div class="side-head"><span>Grupos filtrados</span><button class="btn small" data-act="guardar-grupo" title="Guardar los filtros actuales como grupo" ${filtroActivo(S.ui.filtro) ? '' : 'disabled'}>+ Guardar</button></div>
+    <nav class="sidebar" aria-label="Grupos filtrados y responsables">
+      ${sideItem(sidebarItems[0], !cur && filtroActivo(S.ui.filtro) ? '_' : cur)}
       <div class="side-groups">
+        <div class="side-head"><span>Grupos filtrados</span><button class="btn small" data-act="guardar-grupo" title="Guardar los filtros actuales como grupo" ${filtroActivo(S.ui.filtro) && !responsableActivo() ? '' : 'disabled'}>+ Guardar</button></div>
         ${sidebarItems.slice(1).map(it => sideItem(it, cur)).join('') || '<p class="hint" style="padding:4px 12px">Aplica filtros y guárdalos como grupo para volver a ellos con un clic.</p>'}
-      </div>`}
+        ${sideResponsables()}
+        ${S.ui.modo === 'calendario' ? calLateral() : ''}
+      </div>
       <div class="side-foot">
         <a class="side-item" href="#/resumen"><span class="grow"><b>Resumen del día</b></span></a>
         <a class="side-item" href="#/revision"><span class="grow"><b>Revisión semanal</b></span></a>
@@ -750,9 +753,11 @@ function renderBase() {
       <div class="groups-row">
         <div class="label">Grupos filtrados</div>
         <div class="chips">
-          <button class="chip" data-act="vista" data-id="" aria-pressed="${!cur}">Todas</button>
+          <button class="chip" data-act="vista" data-id="" aria-pressed="${!cur && !filtroActivo(S.ui.filtro)}">Todas</button>
           ${S.vistas.map(v => `<button class="chip" data-act="vista" data-id="${esc(v.id)}" aria-pressed="${cur === v.id}">${esc(v.nombre)}</button>`).join('')}
         </div>
+        ${S.personas.length ? `<div class="label">Responsables</div>
+        <div class="chips">${[...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(p => `<button class="chip" data-act="responsable" data-id="${esc(p.id)}" aria-pressed="${responsableActivo() === p.id}">${esc(p.nombre)}</button>`).join('')}</div>` : ''}
       </div>
       <div class="main-head desk-only">
         <h2>${esc(nombreVista())}</h2>
@@ -786,19 +791,25 @@ function renderBase() {
 function selectorModo(clase) {
   return `<div class="seg modos ${clase}" role="group" aria-label="Modo de vista">${MODOS.map(([v, t]) => `<button data-act="modo" data-v="${v}" aria-pressed="${S.ui.modo === v}">${t}</button>`).join('')}</div>`;
 }
-// Selector de grupo filtrado de la Matriz y el Calendario (independiente del filtro de la Lista).
+// Selector de grupo filtrado de la Matriz y el Calendario en el móvil. Es el mismo filtro que el de la
+// Lista y la barra lateral: elegir un grupo en cualquier sitio lo aplica a los tres modos.
 function selectorGrupo(clase) {
-  const cur = S.ui.grupoVista || '';
-  return `<label class="sel-grupo ${clase}">${clase === 'desk-only' ? '<span>Grupo filtrado</span>' : ''}<select class="input" data-grupo-vista aria-label="Grupo filtrado">
-    <option value="">${clase === 'mob-only' ? 'Grupo filtrado: ninguno · ver todo' : 'Ninguno · ver todo'}</option>
+  const cur = S.ui.vista || '', suelto = !cur && filtroActivo(S.ui.filtro);
+  return `<label class="sel-grupo ${clase}"><select class="input" data-grupo-vista aria-label="Grupo filtrado">
+    <option value="" ${!cur && !suelto ? 'selected' : ''}>Grupo filtrado: ninguno · ver todo</option>
+    ${suelto ? `<option value="_" selected disabled>${esc(nombreVista())}</option>` : ''}
     ${S.vistas.map(v => `<option value="${esc(v.id)}" ${cur === v.id ? 'selected' : ''}>${esc(v.nombre)}</option>`).join('')}</select></label>`;
 }
-// Notas activas del grupo elegido (y de la búsqueda), para la Matriz y el Calendario.
+// Aviso «Mostrando solo…» de la Matriz y el Calendario cuando hay un grupo, responsable o filtro aplicado.
+function avisoGrupo(texto) {
+  if (!filtroActivo(S.ui.filtro)) return '';
+  return `<div class="banner"><span class="grow">Mostrando solo: <b>${esc(nombreVista())}</b>${texto || ''}.</span><button class="btn small" data-act="limpiar-filtro">Ver todas</button></div>`;
+}
+// Notas activas del grupo o filtro elegido (y de la búsqueda), para la Matriz y el Calendario.
 function notasDeGrupo(conRealizadas) {
-  const v = S.ui.grupoVista && S.vistas.find(x => x.id === S.ui.grupoVista);
-  const f = v ? { ...filtroVacio(), ...v.filtro } : null;
+  const f = S.ui.filtro;
   return S.notas.filter(n => (n.estado === 'activa' || (conRealizadas && n.estado === 'realizada'))
-    && (!f || cumpleFiltro(n, f)) && cumpleBusqueda(n, S.ui.q));
+    && cumpleFiltro(n, f) && cumpleBusqueda(n, S.ui.q));
 }
 // Fecha corta de una nota: «hoy 12:30», «⚑ vie 2 oct», «venció 25 sep» o «sin fecha».
 function cuandoCorto(n) {
@@ -816,7 +827,6 @@ const ordenFecha = (a, b) => String(a.fecha_limite || '9999').localeCompare(Stri
 const MATRIZ_MOVIL = 5;   // notas visibles por bloque en el móvil antes de «Ver X más»
 function vistaMatriz() {
   const notas = notasDeGrupo().sort(ordenFecha);
-  const v = S.ui.grupoVista && S.vistas.find(x => x.id === S.ui.grupoVista);
   const bloques = PRIOS.map(p => {
     const lista = notas.filter(n => n.prioridad === p);
     const abierto = S.ui.matrizMas && S.ui.matrizMas[p];
@@ -840,8 +850,8 @@ function vistaMatriz() {
     </section>`;
   }).join('');
   return `<div class="toolbar">${selectorModo('mob-only')}${selectorGrupo('mob-only')}</div>
-    <div class="main-head desk-only"><h2>Matriz de prioridad</h2><span class="hint">${notas.length} ${notas.length === 1 ? 'nota activa' : 'notas activas'} · ordenadas por fecha dentro de cada bloque</span><span class="grow"></span>${selectorGrupo('desk-only')}</div>
-    ${v ? `<div class="banner"><span class="grow">Mostrando solo: <b>${esc(v.nombre)}</b>.</span><button class="btn small" data-act="quitar-grupo-vista">Quitar grupo</button></div>` : ''}
+    <div class="main-head desk-only"><h2>Matriz de prioridad${filtroActivo(S.ui.filtro) ? ' · ' + esc(nombreVista()) : ''}</h2><span class="hint">${notas.length} ${notas.length === 1 ? 'nota activa' : 'notas activas'} · ordenadas por fecha dentro de cada bloque</span></div>
+    ${avisoGrupo()}
     <div class="matriz">${bloques}</div>`;
 }
 function cambiarPrioridad(id, prio) {
@@ -880,7 +890,6 @@ const cargaDia = (notas, f) => Math.min(3, notas.filter(n => n.fecha_limite === 
 
 function vistaCalendario() {
   const c = cal(), notas = notasCal();
-  const v = S.ui.grupoVista && S.vistas.find(x => x.id === S.ui.grupoVista);
   const lun = lunesDe(c.ref);
   const titulo = c.vista === 'mes' ? tituloMes(c.ref)
     : (() => { const dom = addDias(lun, 6), a = new Date(lun + 'T12:00'), b = new Date(dom + 'T12:00');
@@ -890,7 +899,7 @@ function vistaCalendario() {
   const atrasadas = notas.filter(n => n.estado === 'activa' && n.fecha_limite < hoyYmd()).sort(ordenFecha);
   return `<div class="toolbar">${selectorModo('mob-only')}
       <div class="calm-opciones mob-only"><div class="seg"><button data-act="cal-vista" data-v="semana" aria-pressed="${c.vista !== 'mes'}">Agenda</button><button data-act="cal-vista" data-v="mes" aria-pressed="${c.vista === 'mes'}">Mes</button></div>${selectorGrupo('mob-only')}</div></div>
-    <div class="calm mob-only">${calMovil(notas, atrasadas, v)}</div>
+    <div class="calm mob-only">${calMovil(notas, atrasadas)}</div>
     <div class="cal desk-only">
       <div class="cal-head">
         <button class="btn icon-sq" data-act="cal-mover" data-v="-1" aria-label="${c.vista === 'mes' ? 'Mes' : 'Semana'} anterior">‹</button>
@@ -899,7 +908,7 @@ function vistaCalendario() {
         <h2>${esc(titulo)}</h2>
         <div class="seg"><button data-act="cal-vista" data-v="semana" aria-pressed="${c.vista !== 'mes'}">Semana</button><button data-act="cal-vista" data-v="mes" aria-pressed="${c.vista === 'mes'}">Mes</button></div>
       </div>
-      ${v ? `<div class="banner"><span class="grow"><b>Mostrando solo: ${esc(v.nombre)}</b> · Los días vacíos pueden tener notas de otros grupos.</span><button class="btn small" data-act="quitar-grupo-vista">Quitar grupo · ver todo</button></div>` : ''}
+      ${avisoGrupo(' · Los días vacíos pueden tener notas de otros grupos')}
       ${atrasadas.length ? `<div class="cal-atrasadas"><b>Atrasadas · ${atrasadas.length}</b>
         <div class="chips">${atrasadas.map(n => `<button class="chip" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}>${esc(n.titulo)} · ${esc(cuandoCorto(n).t)}</button>`).join('')}</div>
         <span class="hint">Arrástralas a un hueco para replanificar</span></div>` : ''}
@@ -937,7 +946,7 @@ function calSemana(notas) {
   const cabecera = datos.map(d => { const x = new Date(d.f + 'T12:00');
     return `<div class="cal-dh ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}"><b>${DIAS_LARGOS[(x.getDay() + 6) % 7].slice(0, 3)} ${x.getDate()}${d.hoy ? ' · Hoy' : ''}</b><span>Libre: <b>${fmtLibre(d.libre)}</b></span></div>`; }).join('');
   const limites = datos.map(d => `<div class="cal-due ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" data-sinhora="1" data-act="cal-nueva" title="Pulsa para crear una nota con esta fecha, sin hora">
-    ${d.delDia.filter(n => !n.hora_limite).sort((a, b) => rankPrio(a.prioridad) - rankPrio(b.prioridad)).map(n => `<button class="cal-chip p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)} title="${esc(n.titulo)}">${esc(n.titulo)}</button>`).join('')}</div>`).join('');
+    ${d.delDia.filter(n => !n.hora_limite).sort((a, b) => rankPrio(a.prioridad) - rankPrio(b.prioridad)).map(n => `<button class="cal-chip p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)} title="${esc(n.titulo)}">${calTick(n)}<span class="t">${esc(n.titulo)}</span></button>`).join('')}</div>`).join('');
   const horas = Array.from({ length: fin - ini }, (_, i) => `<span style="top:${i * CAL_HH + 2}px">${ini + i}:00</span>`).join('');
   const columnas = datos.map(d => {
     // Las notas fuera del horario visible se pegan al borde; se reparten en columnas según donde se dibujan.
@@ -949,7 +958,7 @@ function calSemana(notas) {
       const fuera = r < vis0 ? '↑ ' : r >= vis1 ? '↓ ' : '';
       return `<button class="cal-ev p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}
         style="top:${top + 1}px;height:${h}px;left:calc(${col / ncol * 100}% + 4px);width:calc(${100 / ncol}% - 8px)" title="${esc(n.hora_limite + ' ' + n.titulo + ' · ' + textoDuracion(dur))}">
-        <b>${fuera}${esc(n.hora_limite)}</b> <span class="t">${esc(n.titulo)}</span> <span class="d">· ${textoDuracion(dur)}${textoAviso(n) ? ' 🔔' : ''}${n.repetir ? ' ↻' : ''}</span>${n.estado === 'activa' ? '<span class="cal-asa" data-estirar aria-hidden="true"></span>' : ''}</button>`;
+        ${calTick(n)}<b>${fuera}${esc(n.hora_limite)}</b> <span class="t">${esc(n.titulo)}</span> <span class="d">· ${textoDuracion(dur)}${textoAviso(n) ? ' 🔔' : ''}${n.repetir ? ' ↻' : ''}</span>${n.estado === 'activa' ? '<span class="cal-asa" data-estirar aria-hidden="true"></span>' : ''}</button>`;
     }).join('');
     const linea = d.hoy && minAhora >= vis0 && minAhora < vis1 ? `<div class="cal-ahora" style="top:${(minAhora - vis0) / 60 * CAL_HH}px"></div>` : '';
     return `<div class="cal-col ${d.hoy ? 'hoy' : ''} ${d.finde ? 'finde' : ''}" data-drop="cal" data-fecha="${d.f}" data-act="cal-nueva" title="Pulsa en un hueco para crear una nota a esa hora" style="height:${alto}px">${bloques}${linea}</div>`;
@@ -971,7 +980,7 @@ function calMes(notas) {
       .sort((a, b) => (a.hora_limite ? 0 : 1) - (b.hora_limite ? 0 : 1) || String(a.hora_limite).localeCompare(String(b.hora_limite)) || rankPrio(a.prioridad) - rankPrio(b.prioridad));
     return `<div class="cal-dia carga${cargaDia(notas, f)} ${mm !== m ? 'fuera' : ''} ${f === hoy ? 'hoy' : ''}" data-drop="cal" data-fecha="${f}" data-act="cal-dia" data-v="${f}">
       <span class="num">${dd}<button class="cal-mas-nota" data-act="cal-nueva" data-fecha="${f}" aria-label="Nueva nota el ${esc(diaLargo(f))}" title="Nueva nota este día">+</button></span>
-      ${lista.slice(0, 2).map(n => `<button class="cal-mi p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)}><i class="dot"></i>${n.hora_limite ? esc(n.hora_limite) + ' ' : ''}${esc(n.titulo)}</button>`).join('')}
+      ${lista.slice(0, 2).map(n => `<button class="cal-mi p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}" ${arrastrable(n)} title="${esc(n.titulo)}">${calTick(n)}<span class="t">${n.hora_limite ? `<b>${esc(n.hora_limite)}</b> ` : ''}${esc(n.titulo)}</span></button>`).join('')}
       ${lista.length > 2 ? `<button class="cal-mas" data-act="cal-dia" data-v="${f}">+${lista.length - 2} más</button>` : ''}
     </div>`;
   }).join('');
@@ -979,6 +988,10 @@ function calMes(notas) {
     <div class="cal-mes-rejilla" style="grid-template-rows:repeat(${semanas}, minmax(0, 1fr))">${celdas}</div></div>`;
 }
 
+// Casilla para dar por realizada una nota sin abrirla (o volverla a pendiente si se ve en gris).
+// Es un <span> porque va dentro del botón de la nota; no abre la nota ni empieza un arrastre.
+const calTick = n => { const hecha = n.estado !== 'activa';
+  return `<span class="cal-tick" role="checkbox" tabindex="0" aria-checked="${hecha}" data-act="${hecha ? 'reabrir' : 'hecha'}" data-id="${esc(n.id)}" title="${hecha ? 'Volver a pendiente' : 'Marcar como realizada'}" aria-label="${hecha ? 'Volver a pendiente' : 'Marcar como realizada'}: ${esc(n.titulo)}"></span>`; };
 // Atributos para poder arrastrar una nota del calendario (solo las pendientes).
 const arrastrable = n => n.estado === 'activa' ? `data-drag="cal" data-titulo="${esc(n.titulo)}" data-cuando="${esc(cuandoCorto(n).t)}"` : '';
 // Mover una nota a otro día u hora (arrastrando), con Deshacer. El aviso previo se recalcula solo.
@@ -1001,9 +1014,9 @@ function cambiarDuracion(id, dur) {
 const sinMes = f => diaCorto(f).replace(',', '').replace(/ \S+$/, '');   // «jue 1»
 const sinDia = f => diaCorto(f).replace(/^\S+ /, '');                    // «1 oct»
 // En el móvil no se arrastra: la fecha se cambia desde el editor.
-function calMovil(notas, atrasadas, grupo) {
+function calMovil(notas, atrasadas) {
   const c = cal(), hoy = hoyYmd(), lun = lunesDe(c.ref);
-  const aviso = grupo ? `<div class="banner"><span class="grow">Mostrando solo: <b>${esc(grupo.nombre)}</b>.</span><button class="btn small" data-act="quitar-grupo-vista">Quitar</button></div>` : '';
+  const aviso = avisoGrupo();
   if (c.vista === 'mes') {
     const [y, m] = c.ref.split('-').map(Number), ini = lunesDe(`${y}-${pad2(m)}-01`), ultimo = ymd(new Date(y, m, 0));
     const semanas = Math.ceil((Math.round((Date.parse(ultimo) - Date.parse(ini)) / DIA) + 1) / 7);
@@ -1042,7 +1055,7 @@ function calMovil(notas, atrasadas, grupo) {
     bloques.push(`<section class="calm-dia-sec" id="calm-${f}"><div class="calm-dia-t ${f === hoy ? 'hoy' : ''}"><h2>${esc(etiquetaDia(f))}</h2><span>${pend === 1 ? '1 nota' : pend + ' notas'}</span><button class="calm-mas" data-act="cal-nueva" data-fecha="${f}" aria-label="Nueva nota el ${esc(diaLargo(f))}">+ Nota</button></div>
       ${lista.map(n => { const e = (n.etiquetas || []).map(etq).filter(Boolean)[0];
         return `<button class="calm-item p-${n.prioridad} ${n.estado !== 'activa' ? 'hecha' : ''}" data-act="abrir" data-id="${esc(n.id)}">
-          <span class="calm-cuando">${n.hora_limite ? esc(n.hora_limite) + (textoAviso(n) ? ' 🔔' : '') : '⚑ Límite'}</span>
+          ${calTick(n)}<span class="calm-cuando">${n.hora_limite ? esc(n.hora_limite) + (textoAviso(n) ? ' 🔔' : '') : '⚑ Límite'}</span>
           <span class="calm-txt"><b>${esc(n.titulo)}</b><small><i class="dot"></i>${PRIO_N[n.prioridad]}${n.hora_limite ? ' · ' + textoDuracion(durNota(n)) : ''}${e ? ' · #' + esc(e.nombre) : ''}${textoCheck(n) ? ' · ' + textoCheck(n) : ''}${n.repetir ? ' · ↻' : ''}</small></span></button>`; }).join('')}</section>`);
   }
   cerrarVacios();
@@ -1063,7 +1076,7 @@ document.addEventListener('touchend', ev => {
   if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) { cal().ref = addDias(cal().ref, dx < 0 ? 7 : -7); renderBase(); }
 }, { passive: true });
 
-// Panel lateral del calendario (ordenador): grupo, mes pequeño, leyenda y opciones.
+// Panel lateral del calendario (ordenador): mes pequeño, leyenda y opciones (debajo de grupos y responsables).
 function calLateral() {
   const c = cal(), notas = notasCal(), [ini, fin] = calHorario(), hoy = hoyYmd();
   const [y, m] = c.ref.split('-').map(Number), primero = lunesDe(`${y}-${pad2(m)}-01`), lun = lunesDe(c.ref);
@@ -1074,7 +1087,6 @@ function calLateral() {
     return `<button class="carga${cargaDia(notas, f)} ${mm !== m ? 'fuera' : ''} ${f === hoy ? 'hoy' : ''} ${semana ? 'semana' : ''}" data-act="cal-dia" data-v="${f}" aria-label="${esc(diaLargo(f))}">${dd}</button>`;
   }).join('');
   return `<div class="cal-side">
-    <section><div class="cal-lbl">Grupo filtrado</div>${selectorGrupo('cal-sel')}<small class="hint">Por defecto el calendario muestra todas las notas con fecha.</small></section>
     <section><div class="cal-mini-t">${esc(tituloMes(c.ref))}</div><div class="cal-mini">${DIAS_CORTOS.map(d => `<span>${d}</span>`).join('')}${mini}</div></section>
     <section class="cal-leyenda"><div class="cal-lbl">Leyenda</div>
       <div><i class="dot p-critica"></i>Urgente <i class="dot p-alta"></i>Alta</div>
@@ -1115,7 +1127,38 @@ const SOLTAR = {
     return { texto: `Al soltar: «${n.titulo}» → ${donde}`, pista: '', hueco: hueco && { ...hueco, texto: 'Soltar aquí · ' + donde },
       hacer: () => moverNota(n.id, { fecha_limite: f, hora_limite: hora }, donde) };
   },
+  // Filas de la Lista: solo se pueden soltar sobre un responsable.
+  lista: () => null,
+  // Cualquier nota soltada sobre un responsable de la barra lateral se le asigna.
+  per: (st, d) => {
+    const n = nota(st.id), p = per(d.dataset.per);
+    if (!n || !p || n.persona_id === p.id) return null;
+    return { texto: `Al soltar: «${n.titulo}» se asigna a ${p.nombre}`, hacer: () => asignarNota(n.id, p.id) };
+  },
+  // Ordenar los grupos de la barra lateral: se coloca encima o debajo según la mitad donde se suelte.
+  grupo: (st, d) => {
+    const ids = S.vistas.map(v => v.id), de = ids.indexOf(st.id), a = ids.indexOf(d.dataset.id);
+    if (de < 0 || a < 0 || de === a) return null;
+    const r = d.getBoundingClientRect(), debajo = st.y > r.top + r.height / 2;
+    const orden = ids.filter(x => x !== st.id);
+    orden.splice(orden.indexOf(d.dataset.id) + (debajo ? 1 : 0), 0, st.id);
+    if (orden.join() === ids.join()) return null;
+    return { texto: 'Al soltar: el grupo queda ' + (debajo ? 'debajo de' : 'encima de') + ' «' + (S.vistas[a] || {}).nombre + '»', clase: debajo ? 'drop-debajo' : 'drop-encima',
+      hacer: () => ordenarGrupos(orden) };
+  },
 };
+function asignarNota(id, personaId) {
+  const n = nota(id); if (!n) return;
+  const antes = n.persona_id || null;
+  editarNotaLocal(id, { persona_id: personaId });
+  renderBase();
+  toast(`«${n.titulo}» asignada a ${(per(personaId) || {}).nombre}`, { deshacer: () => { editarNotaLocal(id, { persona_id: antes }); renderBase(); } });
+}
+function ordenarGrupos(ids) {
+  S.vistas.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
+  encolar({ kind: 'vista', method: 'PUT', path: '/vistas-orden', body: { ids: S.vistas.map(v => v.id) } });
+  guardarLocal(); renderBase(); if (ruta() === 'ajustes') renderOverlay();
+}
 // Estirar: el asa del borde inferior de un bloque de la Semana cambia la duración (pasos de 10 min).
 document.addEventListener('pointerdown', ev => {
   const asa = ev.target.closest('[data-estirar]');
@@ -1141,7 +1184,7 @@ document.addEventListener('pointerup', () => {
 });
 document.addEventListener('pointerdown', ev => {
   const el = ev.target.closest('[data-drag]');
-  if (!el || !SOLTAR[el.dataset.drag] || ev.button !== 0 || window.innerWidth < 900 || ev.target.closest('.tick')) return;
+  if (!el || !SOLTAR[el.dataset.drag] || ev.button !== 0 || window.innerWidth < 900 || ev.target.closest('.tick, .cal-tick')) return;
   const st = { el, tipo: el.dataset.drag, id: el.dataset.id, x0: ev.clientX, y0: ev.clientY, x: ev.clientX, y: ev.clientY, activo: false, tactil: ev.pointerType !== 'mouse' };
   // Al arrastrar un bloque de la Semana, la hora es la de su borde superior, no la del puntero.
   if (el.classList.contains('cal-ev')) st.offY = ev.clientY - el.getBoundingClientRect().top;
@@ -1187,12 +1230,16 @@ function empezarArrastre(st) {
 }
 function moverArrastre(st) {
   st.ghost.style.transform = `translate(${st.x + 12}px, ${st.y - 18}px) rotate(-1.5deg)`;
-  const destino = (document.elementFromPoint(st.x, st.y) || document.body).closest(`[data-drop="${st.tipo}"]`);
-  const res = destino ? SOLTAR[st.tipo](st, destino) : null;
+  // Las notas (de cualquier vista) también se pueden soltar sobre un responsable de la barra lateral.
+  const sel = st.tipo === 'grupo' ? '[data-drop="grupo"]' : `[data-drop="${st.tipo}"], [data-drop="per"]`;
+  const destino = (document.elementFromPoint(st.x, st.y) || document.body).closest(sel);
+  const res = destino ? SOLTAR[destino.dataset.drop](st, destino) : null;
   if (destino !== st.destino) { quitarMarca(st); st.destino = destino; }
   st.res = res;
   if (destino) {
-    destino.classList.toggle('drop', !!res);
+    destino.classList.toggle('drop', !!res && !res.clase);
+    destino.classList.toggle('drop-encima', !!res && res.clase === 'drop-encima');
+    destino.classList.toggle('drop-debajo', !!res && res.clase === 'drop-debajo');
     const h = destino.querySelector('.mx-hint'); if (h) h.textContent = res ? res.pista : '';
     // En la Semana se dibuja el hueco donde quedará la nota.
     let hueco = destino.querySelector(':scope > .cal-hueco');
@@ -1201,11 +1248,12 @@ function moverArrastre(st) {
       hueco.style.top = res.hueco.top + 'px'; hueco.style.height = res.hueco.alto + 'px'; hueco.textContent = res.hueco.texto;
     } else if (hueco) hueco.remove();
   }
-  st.info.textContent = res ? res.texto : destino ? 'Ya está aquí' : st.tipo === 'cal' ? 'Suelta en un día o en una hora' : 'Suelta sobre otro bloque';
+  st.info.textContent = res ? res.texto : destino ? 'Ya está aquí'
+    : { cal: 'Suelta en un día, en una hora o sobre un responsable', lista: 'Suelta sobre un responsable de la izquierda', grupo: 'Suelta encima o debajo de otro grupo' }[st.tipo] || 'Suelta sobre otro bloque o sobre un responsable';
 }
 function quitarMarca(st) {
   if (!st.destino) return;
-  st.destino.classList.remove('drop');
+  st.destino.classList.remove('drop', 'drop-encima', 'drop-debajo');
   const h = st.destino.querySelector('.mx-hint'); if (h) h.textContent = '';
   const hu = st.destino.querySelector(':scope > .cal-hueco'); if (hu) hu.remove();
 }
@@ -1225,9 +1273,36 @@ function medirTopbar() {
   if (tb) document.documentElement.style.setProperty('--topbar-h', tb.offsetHeight + 'px');
 }
 window.addEventListener('resize', medirTopbar);
-function sideItem(it, cur) {
-  return `<button class="side-item" data-act="vista" data-id="${esc(it.id)}" aria-current="${cur === it.id}"><span class="grow"><b>${esc(it.nombre)}</b>${it.regla ? `<small>${esc(it.regla)}</small>` : ''}</span><span class="n">${it.n}</span></button>`;
+// Elegir un grupo filtrado (o «Todas las notas» con id vacío): vale para Lista, Calendario y Matriz.
+function aplicarVista(id) {
+  id = id || null;
+  const v = id && S.vistas.find(x => x.id === id);
+  S.ui.vista = v ? id : null;
+  S.ui.filtro = v ? { ...filtroVacio(), ...JSON.parse(JSON.stringify(v.filtro)) } : filtroVacio();
+  guardarUi(); renderBase();
 }
+// Los grupos guardados se pueden ordenar arrastrándolos en la barra lateral (data-drag="grupo").
+function sideItem(it, cur) {
+  const mover = it.id ? ` data-drag="grupo" data-drop="grupo" data-titulo="${esc(it.nombre)}" data-cuando="Arrastra para ordenar"` : '';
+  return `<button class="side-item" data-act="vista" data-id="${esc(it.id)}" aria-current="${cur === it.id}"${mover}><span class="grow"><b>${esc(it.nombre)}</b>${it.regla ? `<small>${esc(it.regla)}</small>` : ''}</span><span class="n">${it.n}</span></button>`;
+}
+// Responsable que se está viendo (filtro con solo esa persona), para marcarlo en la barra lateral.
+function responsableActivo() {
+  const f = S.ui.filtro;
+  if (S.ui.vista || f.personas.length !== 1) return null;
+  return JSON.stringify({ ...filtroVacio(), personas: f.personas }) === JSON.stringify(f) ? f.personas[0] : null;
+}
+// Apartado «Responsables» de la barra lateral: pulsar uno filtra sus notas; soltar una nota encima se la asigna.
+function sideResponsables() {
+  const act = responsableActivo();
+  const lista = [...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const items = lista.map(p => `<button class="side-item side-per" data-act="responsable" data-id="${esc(p.id)}" data-drop="per" data-per="${esc(p.id)}" aria-current="${act === p.id}">
+      <span class="avatar" aria-hidden="true">${esc(iniciales(p.nombre))}</span><span class="grow"><b>${esc(p.nombre)}</b>${p.cargo ? `<small>${esc(p.cargo)}</small>` : ''}</span><span class="n">${activas().filter(n => n.persona_id === p.id).length}</span></button>`).join('');
+  return `<div class="side-head"><span>Responsables</span><button class="btn small" data-act="per-nueva" title="Añadir un responsable">+ Añadir</button></div>
+    ${items || '<p class="hint" style="padding:4px 12px">Añade a quién sueles asignar notas para ver aquí las de cada uno.</p>'}
+    ${lista.length ? '<p class="hint side-pista">Arrastra una nota encima de un nombre para asignársela.</p>' : ''}`;
+}
+const iniciales = t => t.replace(/[^\p{L}\p{N} ]/gu, '').trim().split(/\s+/).slice(0, 2).map(x => x[0] || '').join('').toUpperCase() || '·';
 function resumenFiltro(f) {
   const g = S.ui.filtro; S.ui.filtro = { ...filtroVacio(), ...f };
   const r = chipsFiltro().join(' · ');
@@ -1242,8 +1317,25 @@ function vacio(total) {
 // ---------- Páginas superpuestas ----------
 const ruta = () => (location.hash || '#/').slice(2);
 function cerrar() { if (history.length > 1 && S._dentro) history.back(); else location.hash = '#/'; }
+// Cerrar pulsando fuera: la nota guarda lo cambiado (no se pierde nada); las páginas con datos a medias
+// (ajustes, dictado, revisión, conflicto) solo se cierran con su botón.
+const CIERRA_FUERA = ['nota', 'filtros', 'menu', 'historial', 'resumen'];
+function cerrarFuera() {
+  const a = ruta().split('/')[0];
+  if (!CIERRA_FUERA.includes(a)) return;
+  if (a === 'nota' && S.ed) {
+    const d = S.ed.d, n = S.ed.id ? nota(S.ed.id) : null;
+    if (!n && !d.titulo.trim() && !d.cuerpo.trim() && !d.checklist.some(x => x.t.trim())) { S.ed = null; cerrar(); return; }
+    if (!d.titulo.trim()) { toast('Escribe un título para guardar la nota, o pulsa ✕ para descartarla.'); return; }
+    if (!n) { guardarEditor(); return; }
+    if (guardarCambiosSilencio()) toast('Cambios guardados');
+    S.ed = null; renderBase(); cerrar(); return;
+  }
+  cerrar();
+}
+document.addEventListener('pointerdown', ev => { S._abajo = ev.target; }, true);
 function pagina(titulo, cuerpo, pie, opt = {}) {
-  return `<div class="overlay" data-act="${opt.sheet ? 'fondo' : ''}"><div class="${opt.sheet ? 'sheet' : 'page'}" role="dialog" aria-modal="true" aria-label="${esc(titulo)}">
+  return `<div class="overlay" data-act="fondo"><div class="${opt.sheet ? 'sheet' : 'page'}" role="dialog" aria-modal="true" aria-label="${esc(titulo)}">
     ${opt.sheet ? '<div class="sheet-grip"></div>' : ''}
     <div class="page-head" ${opt.sheet ? 'style="border-bottom:0;background:none"' : ''}>
       <button class="icon-btn" data-act="cerrar" aria-label="Cerrar">${opt.volver ? ICON.back : ICON.close}</button>
@@ -1298,7 +1390,7 @@ function iniciarEditor(id) {
     ruta: ruta(), id: n ? n.id : null,
     d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
         aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: '', fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
+      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: S.ui.filtro.personas.length === 1 && per(S.ui.filtro.personas[0]) ? S.ui.filtro.personas[0] : '', fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
         aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
     sug: null, sel: 0,
@@ -1332,10 +1424,9 @@ function vistaEditor() {
     <div class="field"><span class="field-label">Prioridad</span>
       <div class="prio-pick">${PRIOS.map(p => `<button class="p-${p}" data-act="ed-prio" data-v="${p}" aria-pressed="${d.prioridad === p}">${PRIO_N[p]}</button>`).join('')}</div>
     </div>
-    <label class="field"><span>Asignar a <small>(opcional)</small></span>
-      <select class="input" data-ed="persona_id"><option value="">Nadie</option>${S.personas.map(p => `<option value="${esc(p.id)}" ${d.persona_id === p.id ? 'selected' : ''}>${esc(p.nombre)}${p.cargo ? ' · ' + esc(p.cargo) : ''}</option>`).join('')}</select>
-      ${S.personas.length ? '' : '<small>Añade personas en Ajustes para poder asignarles notas.</small>'}
-    </label>
+    <div class="field"><span class="field-label">Responsable <small>(opcional)</small></span>
+      <div class="per-pick"><button type="button" data-act="ed-per" data-v="" aria-pressed="${!d.persona_id}">Nadie</button>${[...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(p => `<button type="button" data-act="ed-per" data-v="${esc(p.id)}" aria-pressed="${d.persona_id === p.id}" title="${esc(p.cargo || '')}">${esc(p.nombre)}</button>`).join('')}<button type="button" class="nuevo" data-act="per-nueva">+ Nuevo</button></div>
+    </div>
     <div class="grid2">
       <label class="field"><span>Fecha límite</span><input class="input" type="date" data-ed="fecha_limite" value="${esc(d.fecha_limite)}"></label>
       <div class="field"><span class="field-label">Hora <small>(opcional)</small></span>${selectorHora(d.hora_limite, 'ed')}</div>
@@ -1439,6 +1530,7 @@ function guardarCambiosSilencio() {
   const chk = checklistGuardar(d);
   if (JSON.stringify(n.checklist || []) !== JSON.stringify(chk)) cambios.checklist = chk;
   if (Object.keys(cambios).length) editarNotaLocal(e.id, cambios);
+  return Object.keys(cambios).length > 0;
 }
 function guardarEditor() {
   const e = S.ed, d = e.d;
@@ -1520,7 +1612,7 @@ function vistaFiltros() {
       ${porTipo || '<p class="hint">Todavía no hay etiquetas. Se crean escribiendo # en una nota.</p>'}
     </section>
     <section class="field"><span class="field-label">Prioridad</span><div class="tags-edit">${PRIOS.map(p => chip('f-prio', p, f.prioridades.includes(p), PRIO_N[p])).join('')}</div></section>
-    <section class="field"><span class="field-label">Asignada a</span><div class="tags-edit">${S.personas.map(p => chip('f-per', p.id, f.personas.includes(p.id), esc(p.nombre))).join('')}${chip('f-per', 'ninguna', f.personas.includes('ninguna'), 'Sin asignar')}</div></section>
+    <section class="field"><span class="field-label">Responsable</span><div class="tags-edit">${S.personas.map(p => chip('f-per', p.id, f.personas.includes(p.id), esc(p.nombre))).join('')}${chip('f-per', 'ninguna', f.personas.includes('ninguna'), 'Sin asignar')}</div></section>
     <section class="field"><span class="field-label">Otros</span>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="conAlarma" ${f.conAlarma ? 'checked' : ''}>Con avisos</label>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="venceSemana" ${f.venceSemana ? 'checked' : ''}>Vencen esta semana (incluye atrasadas)</label>
@@ -1945,7 +2037,7 @@ function vistaConflicto() {
   const c = S.conflictos[0];
   if (!c) return pagina('Conflictos', '<p>No hay conflictos pendientes.</p>', `<button class="btn primary" data-act="cerrar">Cerrar</button>`);
   const mia = nota(c.op.ref) || {}, srv = c.servidor;
-  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['checklist', 'Checklist'], ['estado', 'Estado'], ['persona_id', 'Asignada a']];
+  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['checklist', 'Checklist'], ['estado', 'Estado'], ['persona_id', 'Responsable']];
   const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'aviso_unidad' ? (textoAviso(n) || '—') : k === 'checklist' ? ((n.checklist || []).map(p => (p.hecho ? '☑ ' : '☐ ') + p.t).join(' · ') || '—') : k === 'persona_id' ? ((per(n[k]) || {}).nombre || '—') : (n[k] || '—');
   const col = (n, t) => `<div><b>${t}</b>${campos.map(([k, l]) => `<span class="${JSON.stringify(mia[k] || '') !== JSON.stringify(srv[k] || '') ? 'changed' : ''}"><small class="hint">${l}:</small> ${esc(val(n, k))}</span>`).join('')}</div>`;
   const cuerpo = `<p>Esta nota se cambió en otro dispositivo mientras la editabas aquí. Elige qué versión quieres conservar. Lo marcado en naranja es lo que difiere.</p>
@@ -1994,7 +2086,7 @@ function vistaAjustes() {
     ${TIPOS.map(([t, nombre]) => { const es = S.etiquetas.filter(e => e.tipo === t); return es.length ? `<h3>${nombre}</h3><div class="list-plain">${es.map(e => `<div><span class="grow"><b>#${esc(e.nombre)}${e.cerrada ? ' · cerrada' : ''}</b><small>${e.alias ? 'Alias: ' + esc(e.alias) : 'Sin alias'} · ${cont(e)} notas</small></span><button class="btn small" data-act="etq-editar" data-id="${esc(e.id)}">Editar</button></div>`).join('')}</div>` : ''; }).join('') || '<p class="hint">Todavía no hay etiquetas. Crea una aquí o escribe # en cualquier nota.</p>'}
   </section>
 
-  <section class="card"><div class="row"><h2 class="grow">Personas</h2><button class="btn small" data-act="per-nueva">+ Nueva</button></div>
+  <section class="card"><div class="row"><h2 class="grow">Responsables</h2><button class="btn small" data-act="per-nueva">+ Nuevo</button></div>
     <div class="list-plain">${S.personas.map(p => `<div><span class="grow"><b>${esc(p.nombre)}</b><small>${esc(p.cargo || '')}</small></span><button class="btn small" data-act="per-editar" data-id="${esc(p.id)}">Editar</button></div>`).join('') || '<p class="hint">Añade a quién sueles asignar notas: jefe de obra, encargado, jefe de producción…</p>'}</div>
   </section>
 
@@ -2095,8 +2187,8 @@ function modalPersona() {
   const m = S.modal, p = m.id ? per(m.id) : { nombre: '', cargo: '' };
   const cuerpo = `<label class="field"><span>Nombre</span><input class="input" id="mp-nombre" value="${esc(p.nombre)}" placeholder="Encargado, Jordi…"></label>
     <label class="field"><span>Cargo <small>(opcional)</small></span><input class="input" id="mp-cargo" value="${esc(p.cargo || '')}" placeholder="Jefe de producción"></label>
-    ${m.id ? '<button class="btn danger" data-act="mp-borrar">Eliminar persona</button>' : ''}`;
-  return pagina(m.id ? 'Editar persona' : 'Nueva persona', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="mp-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
+    ${m.id ? '<button class="btn danger" data-act="mp-borrar">Eliminar responsable</button>' : ''}`;
+  return pagina(m.id ? 'Editar responsable' : 'Nuevo responsable', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="mp-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
 }
 function modalGrupo() {
   const m = S.modal, v = m.id ? S.vistas.find(x => x.id === m.id) : null;
@@ -2140,9 +2232,20 @@ function accionAlarmaLocal(id, accion) {
 // ---------- Acciones ----------
 const ACT = {
   cerrar: () => cerrar(),
-  fondo: (el, ev) => { if (ev.target !== el) return; if (el.closest('#modal')) { S.modal = null; renderModal(); } else cerrar(); },
+  // Pulsar en la zona oscura de fuera de la ventana la cierra. Solo si el clic empezó también fuera
+  // (al seleccionar texto dentro y soltar fuera no se cierra).
+  fondo: (el, ev) => {
+    if (ev.target !== el || S._abajo !== el) return;
+    if (el.closest('#modal')) { S.modal = null; renderModal(); } else cerrarFuera();
+  },
   'modal-cerrar': () => { S.modal = null; renderModal(); },
-  hecha: (el) => marcarRealizada(el.dataset.id, el.closest('.nota')),
+  hecha: (el) => marcarRealizada(el.dataset.id, el.closest('.nota, .cal-ev, .cal-chip, .cal-mi, .calm-item')),
+  // Casilla marcada de una realizada (en gris en el calendario): vuelve a pendiente.
+  reabrir: (el) => {
+    const n = nota(el.dataset.id); if (!n || n.estado !== 'realizada') return;
+    editarNotaLocal(n.id, { estado: 'activa' }); renderBase();
+    toast('La nota vuelve a estar pendiente', { deshacer: () => { editarNotaLocal(n.id, { estado: 'realizada' }); renderBase(); } });
+  },
   abrir: (el) => { location.hash = '#/nota/' + el.dataset.id; },
   'ir-panel': () => { location.hash = '#/'; },
   'res-dia': (el) => {
@@ -2152,17 +2255,16 @@ const ACT = {
   },
   buscar: () => { S.ui.buscar = true; renderBase(); const q = $('#qm'); if (q) q.focus(); },
   'cerrar-buscar': () => { S.ui.buscar = false; S.ui.q = ''; renderBase(); },
-  vista: (el) => {
-    const id = el.dataset.id || null;
-    S.ui.vista = id;
-    const v = id && S.vistas.find(x => x.id === id);
-    S.ui.filtro = v ? { ...filtroVacio(), ...JSON.parse(JSON.stringify(v.filtro)) } : filtroVacio();
+  vista: (el) => aplicarVista(el.dataset.id),
+  // Responsable de la barra lateral: muestra solo sus notas (en Lista, Calendario y Matriz).
+  responsable: (el) => {
+    S.ui.vista = null;
+    S.ui.filtro = { ...filtroVacio(), personas: [el.dataset.id] };
     guardarUi(); renderBase();
   },
   agrupar: (el) => { S.ui.agrupar = el.dataset.v; guardarUi(); renderBase(); },
   modo: (el) => { S.ui.modo = el.dataset.v; guardarUi(); renderBase(); window.scrollTo(0, 0); },
   'mx-mas': (el) => { S.ui.matrizMas[el.dataset.v] = !S.ui.matrizMas[el.dataset.v]; renderBase(); },
-  'quitar-grupo-vista': () => { S.ui.grupoVista = ''; guardarUi(); renderBase(); },
   'cal-vista': (el) => { cal().vista = el.dataset.v; guardarUi(); renderBase(); },
   'cal-hoy': () => { cal().ref = hoyYmd(); renderBase(); },
   // Agenda del móvil: tocar un día de la tira lleva a sus notas.
@@ -2217,6 +2319,7 @@ const ACT = {
 
   // Editor
   'ed-prio': (el) => { S.ed.d.prioridad = el.dataset.v; renderOverlay(); },
+  'ed-per': (el) => { S.ed.d.persona_id = el.dataset.v; renderOverlay(); },
   'ed-dur': (el) => {
     if (el.dataset.v === 'otra') S.ed.durOtra = true;
     else { S.ed.durOtra = false; S.ed.d.duracion = Number(el.dataset.v); }
@@ -2371,8 +2474,11 @@ const ACT = {
     const nombre = $('#mp-nombre').value.trim(), cargo = $('#mp-cargo').value.trim();
     if (!nombre) { toast('Escribe un nombre.'); return; }
     if (S.modal.id) { Object.assign(per(S.modal.id), { nombre, cargo }); encolar({ kind: 'persona', method: 'PUT', path: '/personas/' + S.modal.id, body: { nombre, cargo } }); }
-    else { const p = { id: uid(), nombre, cargo }; S.personas.push(p); encolar({ kind: 'persona', method: 'POST', path: '/personas', body: p }); }
-    guardarLocal(); S.modal = null; renderModal(); renderOverlay();
+    else {
+      const p = { id: uid(), nombre, cargo }; S.personas.push(p); encolar({ kind: 'persona', method: 'POST', path: '/personas', body: p });
+      if (S.ed && ruta().startsWith('nota')) S.ed.d.persona_id = p.id;   // creado desde la nota: se le asigna
+    }
+    guardarLocal(); S.modal = null; renderModal(); renderOverlay(); renderBase();
   },
   'mp-borrar': () => {
     const p = per(S.modal.id);
@@ -2473,7 +2579,7 @@ document.addEventListener('change', ev => {
   if (t.dataset.ed && S.ed && t.type === 'checkbox') S.ed.d[t.dataset.ed] = t.checked;
   if (t.dataset.p != null && S.dic && (t.dataset.f === 'add-tag' || t.dataset.f === 'incluir')) return;
   if (t.dataset.fotos) { const files = [...t.files]; t.value = ''; anadirFotos(t.dataset.fotos, files); return; }
-  if (t.matches('[data-grupo-vista]')) { S.ui.grupoVista = t.value; guardarUi(); renderBase(); return; }
+  if (t.matches('[data-grupo-vista]')) { aplicarVista(t.value); return; }
   if (t.dataset.resumen) {
     if (t.dataset.resumen === 'activo') guardarResumen('activo', t.checked ? '1' : '0');
     else if (/^\d{2}:\d{2}$/.test(t.value)) guardarResumen('hora', t.value);
@@ -2504,6 +2610,7 @@ function onCuerpo(ta) {
   pintarSug();
 }
 document.addEventListener('keydown', ev => {
+  if (ev.target.classList && ev.target.classList.contains('cal-tick') && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); ev.stopPropagation(); ev.target.click(); return; }
   const t = ev.target;
   // Checklist: Enter añade un punto debajo; borrar en un punto vacío lo quita.
   if (S.ed && t.dataset && t.dataset.chkT != null) {
@@ -2555,7 +2662,7 @@ async function arrancar() {
     if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; }
     if (ob) { S.outbox = (ob.outbox || []).map(o => ({ ...o, enviando: false })); S.conflictos = ob.conflictos || []; }
     if (audios) S.audios = audios;
-    if (ui) { S.ui.modo = MODOS.some(m => m[0] === ui.modo) ? ui.modo : 'lista'; S.ui.grupoVista = ui.grupoVista || ''; if (ui.cal) Object.assign(S.ui.cal, ui.cal, { ref: '' }); S.ui.agrupar = ui.agrupar || 'fecha'; S.ui.vista = ui.vista || null; S.ui.filtro = { ...filtroVacio(), ...(ui.filtro || {}) }; }
+    if (ui) { S.ui.modo = MODOS.some(m => m[0] === ui.modo) ? ui.modo : 'lista'; if (ui.cal) Object.assign(S.ui.cal, ui.cal, { ref: '' }); S.ui.agrupar = ui.agrupar || 'fecha'; S.ui.vista = ui.vista || null; S.ui.filtro = { ...filtroVacio(), ...(ui.filtro || {}) }; }
   } catch (e) { console.warn('Almacenamiento local no disponible', e); }
   renderBase();
   renderOverlay();

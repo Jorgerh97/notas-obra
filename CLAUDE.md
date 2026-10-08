@@ -43,7 +43,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - Fuentes Barlow (texto) y Barlow Condensed (títulos), alojadas en `app/fonts/`.
 - Prioridades: **Urgente** rojo (valor interno `critica`, no cambiarlo), **Alta** naranja, **Normal** azul, **Baja** gris. Siempre con su nombre escrito además del color.
 - Botón **Dictar** naranja y **Nueva nota** azul. Vista compacta: en móvil la descripción ocupa una línea con «…»; en ordenador cada nota es una fila.
-- Corte móvil / ordenador en 900 px. En ordenador, barra lateral con grupos filtrados.
+- Corte móvil / ordenador en 900 px. En ordenador, barra lateral con grupos filtrados y responsables (en todos los modos; en Calendario, además, sus opciones debajo).
 - Usa las clases y tokens existentes de `app.css` antes de crear estilos nuevos. Textos de la interfaz en castellano, frases cortas.
 - Bocetos acordados en `docs/bocetos/*.dc.html` (marcado y estilos de referencia; no se abren solos) y en el lienzo https://claude.ai/artifact/TQ5ToUS1SVEnq7LsgP92MY. Capturas de la fase 1 en `docs/capturas-fase1/`.
 
@@ -63,6 +63,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **Fase 2**: hecha en la versión 1.2.0 (calendario, matriz, arrastres, duración y resumen matutino → `docs/FASE2.md`). Modo Lista/Calendario/Matriz en `S.ui.modo`; arrastres con Pointer Events en el objeto `SOLTAR` (tipos `prio` y `cal`); config compartida `cal_inicio`/`cal_fin` y `resumen_activo`/`resumen_hora`/`resumen_dias`; resumen enviado por `resumenMatutino()` en el cron.
 - **Fase 3**: hecha en la versión 1.3.0 (checklists, notas recurrentes, PDF para reunión y fotos en R2 → `docs/FASE3.md`). Columnas nuevas `checklist`, `repetir`, `serie`, `prio_antes`, `fotos`; la siguiente repetición se crea con id `serie_fecha` (`proximaRepeticion` en worker y app); fotos en el bucket R2 `notas-obra-fotos` (binding `FOTOS`), cola local `fotos-pend` en IndexedDB. Descartados por Jorge: nota → borrador de Gmail y conexión con «Visitas de obra».
 - **1.3.1** (6 oct 2026): hora con desplegables (minutos de 5 en 5), crear nota pulsando en el calendario y aviso de worker antiguo → `docs/PENDIENTE.md`. Existe un worker antiguo `proud-salad-c6ba` con la misma base D1: no usarlo; borrarlo solo con confirmación de Jorge.
+- **1.4.0** (8 oct 2026): grupos y «Responsables» (personas) en la barra lateral para los tres modos, arrastrar notas a un responsable, ordenar grupos arrastrando, casilla de realizada en el calendario, cerrar ventanas pulsando fuera, calendario más legible y mejor hora por voz → `docs/PENDIENTE.md`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

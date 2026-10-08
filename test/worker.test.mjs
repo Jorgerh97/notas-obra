@@ -23,6 +23,8 @@ const mf = new Miniflare({
       return new Response(JSON.stringify({ stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'guardar_notas', input: { notas: [
         { titulo: 'Confirmar hormigonado', cuerpo: 'Llamar a planta', prioridad: 'critica', etiquetas: ['mallorca245', 'Inventada'], evidencias: [{ oido: 'la de Mallorca', etiqueta: 'Mallorca245' }], persona: 'encargado', fecha_limite: '2026-09-30', hora_limite: '07:30', aviso_unidad: 'h', aviso_cant: 2 },
         { titulo: 'Revisar bajantes', cuerpo: 'Con el fontanero', prioridad: 'normal', etiquetas: [], etiquetas_nuevas: [{ nombre: 'Fontanería general', similar: 'Instalaciones', oido: 'fontanero' }], persona: 'Nadie', fecha_limite: 'mañana', hora_limite: '25:00', aviso_unidad: 'd', aviso_cant: 9, checklist: ['Bajante 1', '  ', 'Bajante 2'] },
+        { titulo: 'Llamar a la grúa', cuerpo: '', prioridad: 'normal', etiquetas: [], persona: '', fecha_limite: '', hora_limite: '9:30' },
+        { titulo: 'Pedir hormigón', cuerpo: '', prioridad: 'normal', etiquetas: [], persona: '', fecha_limite: '2026-10-20', hora_limite: '8.15' },
       ] } }] }), { headers: { 'content-type': 'application/json' } });
     }
     if (url.hostname === 'push.example') {
@@ -72,8 +74,15 @@ r = await call('DELETE', '/notas/nota_0001'); ok(r.s === 200, 'borrado definitiv
 
 // Dictado
 r = await call('POST', '/analizar', { texto: 'hormigonado de la de Mallorca', ahora_local: 'martes, 29/09/2026 10:00' });
-ok(r.s === 200 && r.d.notas.length === 2, 'analizar devuelve 2 notas');
-const [a, b] = r.d.notas;
+ok(r.s === 200 && r.d.notas.length === 4, 'analizar devuelve las notas');
+const [a, b, c3, c4] = r.d.notas;
+{
+  const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Madrid', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date());
+  const g = t => p.find(x => x.type === t).value, hoyMad = `${g('year')}-${g('month')}-${g('day')}`, horaMad = `${g('hour')}:${g('minute')}`;
+  const esperada = '09:30' > horaMad ? hoyMad : new Date(Date.parse(hoyMad + 'T12:00:00Z') + 864e5).toISOString().slice(0, 10);
+  ok(c3.hora_limite === '09:30' && c3.fecha_limite === esperada, 'hora dictada sin día: «9:30» → 09:30 de hoy o mañana');
+  ok(c4.hora_limite === '08:15' && c4.fecha_limite === '2026-10-20', 'hora dictada con punto: «8.15» → 08:15');
+}
 ok(JSON.stringify(a.etiquetas) === '["Mallorca245"]', 'etiqueta existente normalizada, inventada fuera');
 ok(a.etiquetas_nuevas.length === 1 && a.etiquetas_nuevas[0].nombre === 'Inventada', 'etiqueta inventada pasa a propuesta nueva');
 ok(a.persona === 'Encargado' && b.persona === '', 'persona validada');

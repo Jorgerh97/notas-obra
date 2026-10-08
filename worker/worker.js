@@ -556,7 +556,7 @@ Reglas:
 - etiquetas_nuevas: solo si se menciona claramente una obra, industrial o asunto que no está en la lista y sería útil etiquetarlo. Nombre sin espacios (por ejemplo "Fontaneria" o "Nave_Sabadell"). En similar pon la etiqueta existente más parecida, o vacío si no hay ninguna.
 - persona: solo de la lista de personas existentes, cuando se diga que la nota es para alguien o que alguien tiene que hacerla. Si no, vacío.
 - fecha_limite (AAAA-MM-DD): cuando se diga para cuándo hay que hacerlo, o el día en que se pide un aviso o recordatorio. Calcula las fechas relativas ("el jueves", "la semana que viene") a partir de la fecha actual que se indica.
-- hora_limite (HH:MM, 24 h, hora local): solo si se dice una hora concreta ("a las 10", "a las 4 de la tarde" → 16:00). Si se dice una hora sin día, la fecha límite es hoy, o mañana si esa hora ya ha pasado. A la hora límite la app avisa siempre; no hace falta pedirlo.
+- hora_limite (HH:MM, 24 h, hora local, siempre con dos cifras: "09:30"): cuando se diga una hora o un momento concreto del día. Ejemplos: "a las 10" → 10:00; "a las 4 de la tarde" → 16:00; "sobre las 9 y media" → 09:30; "a las 8 menos cuarto" → 07:45; "a las 12 y cuarto" → 12:15; "a mediodía" → 12:00; "a primera hora" → 08:00; "a última hora" o "al final del día" → 18:00. En obra, una hora de 1 a 6 sin más es de la tarde ("a las 3" → 15:00) y de 7 a 11 es de la mañana. Si se dice una hora sin día, la fecha límite es hoy, o mañana si esa hora ya ha pasado. A la hora límite la app avisa siempre; no hace falta pedirlo.
 - aviso_unidad (h, d o s) y aviso_cant: solo si se pide que avise con antelación ("avísame un día antes" → d y 1; "dos horas antes" → h y 2; "una semana antes" → s y 1). Horas de 1 a 12, días de 1 a 7, semanas de 1 a 4. Si no se pide, unidad vacía y 0.
 - checklist: solo si se enumeran pasos o elementos concretos que hay que ir marcando ("pedir oferta a tres industriales: Puertas Vidal, Carpintería Roca y Alumisa" → un punto por industrial). Textos cortos. Si no, vacío.
 - repetir: solo si se dice que se repite: laborables ("cada día", "todos los días laborables"), semanal ("cada lunes", "todas las semanas"), quincenal ("cada dos semanas"), mensual ("cada mes", "el día 5 de cada mes"). Pon también la fecha límite de la primera vez. Si no, vacío.
@@ -653,8 +653,7 @@ async function analizar(env, b) {
       evidencias: (n.evidencias || []).filter(e => porNorm[norm(e.etiqueta)]).map(e => ({ oido: txt(e.oido, 80), etiqueta: porNorm[norm(e.etiqueta)] })).slice(0, 10),
       etiquetas_nuevas: nuevas.slice(0, 5),
       persona: perNorm[norm(n.persona)] || '',
-      fecha_limite: fechaOk(n.fecha_limite) ? n.fecha_limite : '',
-      hora_limite: fechaOk(n.fecha_limite) && horaOk(n.hora_limite) ? n.hora_limite : '',
+      ...fechaHoraDictado(n),
       aviso_unidad: fechaOk(n.fecha_limite) && avisoOk(n.aviso_unidad, n.aviso_cant) ? n.aviso_unidad : '',
       aviso_cant: fechaOk(n.fecha_limite) && avisoOk(n.aviso_unidad, n.aviso_cant) ? n.aviso_cant : 0,
       duracion: Number.isInteger(n.duracion) && n.duracion > 0 ? Math.min(n.duracion, 1440) : 0,
@@ -663,6 +662,22 @@ async function analizar(env, b) {
     };
   });
   return { notas, uso: data.usage || null };
+}
+
+// Hora del dictado: admite "9:30", "9.30" o "9" y la deja en "09:30". Si hay hora pero no día,
+// la fecha es hoy (o mañana si esa hora ya ha pasado en Madrid), como se pide a Claude.
+function normHora(v) {
+  const m = String(v || '').trim().match(/^(\d{1,2})(?:[:.h](\d{2}))?\s*h?$/i);
+  if (!m) return '';
+  const h = `${m[1].padStart(2, '0')}:${m[2] || '00'}`;
+  return horaOk(h) ? h : '';
+}
+function fechaHoraDictado(n, ahora = Date.now()) {
+  const hora = normHora(n.hora_limite);
+  if (fechaOk(n.fecha_limite)) return { fecha_limite: n.fecha_limite, hora_limite: hora };
+  if (!hora || n.fecha_limite) return { fecha_limite: '', hora_limite: '' };   // fecha mal escrita: mejor sin fecha
+  const p = partesMadrid(ahora);
+  return { fecha_limite: hora > p.hora ? p.fecha : sumarDias(p.fecha, 1), hora_limite: hora };
 }
 
 async function transcribir(env, request) {
