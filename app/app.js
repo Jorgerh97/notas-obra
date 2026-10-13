@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.4.0';
+const VERSION = '1.4.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -2531,7 +2531,10 @@ function toggle(arr, v) { const i = arr.indexOf(v); if (i >= 0) arr.splice(i, 1)
 function cambioFiltro() { guardarUi(); renderBase(); renderOverlay(); }
 
 document.addEventListener('click', ev => {
-  const el = ev.target.closest('[data-act]');
+  let el = ev.target.closest('[data-act]');
+  // El fondo de las ventanas (data-act="fondo") solo cuenta si se pulsa el propio fondo. Si no, los clics
+  // de dentro (casillas, botón de fotos…) seguirían aquí y el preventDefault los anularía.
+  if (el && el.dataset.act === 'fondo' && ev.target !== el) el = null;
   if (el && ACT[el.dataset.act]) {
     if (el.tagName === 'INPUT' && el.type === 'checkbox') { ACT[el.dataset.act](el, ev); return; }
     ev.preventDefault();

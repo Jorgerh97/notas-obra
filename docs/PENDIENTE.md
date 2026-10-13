@@ -1,6 +1,13 @@
 # Pendiente para la próxima actualización
 
-(Nada pendiente.)
+## Importar notas desde un CSV (pedido el 13 oct 2026)
+- En Ajustes (o menú): «Importar notas desde CSV» y «Descargar plantilla» (CSV con cabeceras y 2 filas de ejemplo, con BOM UTF-8 para que Excel muestre bien los acentos).
+- Columnas (solo Título obligatorio): Título, Descripción, Prioridad (Urgente/Alta/Normal/Baja), Fecha límite (dd/mm/aaaa; aceptar también aaaa-mm-dd), Hora (9:30), Responsable (nombre), Etiquetas (separadas por comas), Aviso previo («1 día», «2 horas», «1 semana»), Duración (min), Repetir (laborables/semanal/quincenal/mensual), Checklist (puntos separados por «|»).
+- Separador «;» (Excel en España) o «,», detectado solo; comillas y saltos de línea dentro de celdas; UTF-8 o Windows-1252.
+- Antes de guardar, pantalla de revisión como la del dictado (reutilizar `vistaRevisionDictado`/`tarjetaPropuesta` si encaja): quitar o editar filas; responsables y etiquetas que no existen → crear / usar parecido / descartar; filas con fecha u hora mal escritas marcadas en naranja. Guardar todas con `crearNotaLocal` (funciona sin conexión), origen 'csv'.
+
+## Hecho en la versión 1.4.1 (13 oct 2026)
+- Arreglo: desde la 1.4.0 el fondo de todas las ventanas lleva `data-act="fondo"` y el clic de cualquier cosa de dentro sin `data-act` propio (casillas como «Subir a Urgente…» o las del checklist, el botón «+ Foto») caía en él y el `preventDefault` lo anulaba. Ahora el fondo solo cuenta si se pulsa el propio fondo.
 
 ## Hecho en la versión 1.4.0 (8 oct 2026)
 - Grupos filtrados unificados: el grupo (o responsable) elegido en la barra lateral se aplica a Lista, Calendario y Matriz y se mantiene al cambiar de modo. Se quitó el filtro aparte `S.ui.grupoVista`; `notasDeGrupo` usa `S.ui.filtro`. En el móvil, el desplegable de grupo de Matriz/Calendario es el mismo filtro (`aplicarVista`).
