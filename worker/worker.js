@@ -360,7 +360,7 @@ async function crearNota(env, b, dispositivo) {
     aviso_cant: c.aviso_cant || null, aviso_unidad: c.aviso_unidad || null, alarma: c.alarma || null, alarma_enviada: 0,
     subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null, checklist: c.checklist || null,
     repetir: c.repetir || null, serie: c.serie || null,
-    origen: ['manual', 'voz', 'app'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
+    origen: ['manual', 'voz', 'app', 'csv'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
     transcripcion: b.transcripcion ? txt(b.transcripcion, 20000) : null,
     creada: t, actualizada: t, realizada_en: c.realizada_en || null, eliminada_en: c.eliminada_en || null, borrar_en: c.borrar_en || null,
     version: 1,

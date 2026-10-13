@@ -92,6 +92,10 @@ ok(a.aviso_unidad === 'h' && a.aviso_cant === 2 && b.aviso_unidad === '' && b.ho
 ok(claudeInput.messages[0].content.includes('Mallorca245 (obra; alias: Mallorca)'), 'Claude recibe etiquetas con alias');
 ok(JSON.stringify(b.checklist) === '["Bajante 1","Bajante 2"]' && JSON.stringify(a.checklist) === '[]', 'checklist del dictado (sin puntos vacíos)');
 
+// Importación CSV: el origen se guarda
+r = await call('POST', '/notas', { id: 'nota_csv01', titulo: 'Importada', origen: 'csv', origen_ref: 'plantilla.csv' });
+ok(r.s === 200 && r.d.nota.origen === 'csv', 'nota importada desde CSV guarda su origen');
+
 // Checklists
 r = await call('POST', '/notas', { id: 'nota_check', titulo: 'Pedir oferta de carpintería', checklist: [{ t: 'Industrial 1', hecho: true }, { t: 'Industrial 2' }, 'Industrial 3', { t: '' }] });
 ok(r.s === 200 && r.d.nota.checklist.length === 3 && r.d.nota.checklist[0].hecho === true && r.d.nota.checklist[2].hecho === false, 'crear nota con checklist (limpio)');

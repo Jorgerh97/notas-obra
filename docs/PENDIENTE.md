@@ -1,10 +1,10 @@
 # Pendiente para la próxima actualización
 
-## Importar notas desde un CSV (pedido el 13 oct 2026)
-- En Ajustes (o menú): «Importar notas desde CSV» y «Descargar plantilla» (CSV con cabeceras y 2 filas de ejemplo, con BOM UTF-8 para que Excel muestre bien los acentos).
-- Columnas (solo Título obligatorio): Título, Descripción, Prioridad (Urgente/Alta/Normal/Baja), Fecha límite (dd/mm/aaaa; aceptar también aaaa-mm-dd), Hora (9:30), Responsable (nombre), Etiquetas (separadas por comas), Aviso previo («1 día», «2 horas», «1 semana»), Duración (min), Repetir (laborables/semanal/quincenal/mensual), Checklist (puntos separados por «|»).
-- Separador «;» (Excel en España) o «,», detectado solo; comillas y saltos de línea dentro de celdas; UTF-8 o Windows-1252.
-- Antes de guardar, pantalla de revisión como la del dictado (reutilizar `vistaRevisionDictado`/`tarjetaPropuesta` si encaja): quitar o editar filas; responsables y etiquetas que no existen → crear / usar parecido / descartar; filas con fecha u hora mal escritas marcadas en naranja. Guardar todas con `crearNotaLocal` (funciona sin conexión), origen 'csv'.
+(Nada pendiente.)
+
+## Hecho en la versión 1.5.0 (13 oct 2026)
+- Importar notas desde CSV: página `#/importar` (Ajustes → Importar notas, y menú del móvil) con «Descargar plantilla» (`plantillaCsv`, «;» y BOM UTF-8) y «Elegir archivo CSV». `leerCsv` detecta «;» o «,», comillas y saltos de línea; UTF-8 o Windows-1252. `propuestasCsv` reconoce las columnas por su nombre (o el orden de la plantilla si no hay cabecera), máx. 500 filas.
+- Revisión con la pantalla del dictado (`S.dic.csv`): avisos por fila en naranja (fecha/hora/aviso/duración/repetir/prioridad mal escritos), responsables y etiquetas nuevos con Crear / Descartar (la decisión vale para todas las filas). Guardado con `crearNotaLocal`, origen `csv` (añadido a la lista del worker).
 
 ## Hecho en la versión 1.4.1 (13 oct 2026)
 - Arreglo: desde la 1.4.0 el fondo de todas las ventanas lleva `data-act="fondo"` y el clic de cualquier cosa de dentro sin `data-act` propio (casillas como «Subir a Urgente…» o las del checklist, el botón «+ Foto») caía en él y el `preventDefault` lo anulaba. Ahora el fondo solo cuenta si se pulsa el propio fondo.

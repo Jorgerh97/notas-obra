@@ -64,6 +64,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **Fase 3**: hecha en la versión 1.3.0 (checklists, notas recurrentes, PDF para reunión y fotos en R2 → `docs/FASE3.md`). Columnas nuevas `checklist`, `repetir`, `serie`, `prio_antes`, `fotos`; la siguiente repetición se crea con id `serie_fecha` (`proximaRepeticion` en worker y app); fotos en el bucket R2 `notas-obra-fotos` (binding `FOTOS`), cola local `fotos-pend` en IndexedDB. Descartados por Jorge: nota → borrador de Gmail y conexión con «Visitas de obra».
 - **1.3.1** (6 oct 2026): hora con desplegables (minutos de 5 en 5), crear nota pulsando en el calendario y aviso de worker antiguo → `docs/PENDIENTE.md`. Existe un worker antiguo `proud-salad-c6ba` con la misma base D1: no usarlo; borrarlo solo con confirmación de Jorge.
 - **1.4.0** (8 oct 2026): grupos y «Responsables» (personas) en la barra lateral para los tres modos, arrastrar notas a un responsable, ordenar grupos arrastrando, casilla de realizada en el calendario, cerrar ventanas pulsando fuera, calendario más legible y mejor hora por voz → `docs/PENDIENTE.md`.
+- **1.4.1** (13 oct 2026): arreglo de casillas y «+ Foto» dentro de las ventanas. **1.5.0** (13 oct 2026): importar notas desde CSV (`#/importar`) → `docs/PENDIENTE.md`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.4.1';
+const VERSION = '1.5.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1367,6 +1367,7 @@ function pintarOverlay() {
   if (a === 'filtros') { ov.innerHTML = vistaFiltros(); return; }
   if (a === 'menu') { ov.innerHTML = vistaMenu(); return; }
   if (a === 'dictado') { ov.innerHTML = vistaDictado(); return; }
+  if (a === 'importar') { ov.innerHTML = S.dic && S.dic.csv ? vistaRevisionDictado() : vistaImportar(); return; }
   if (a === 'historial') { ov.innerHTML = vistaHistorial(); if (S.ui.histTab === 'archivos') cargarArchivos(); return; }
   if (a === 'ajustes') { ov.innerHTML = vistaAjustes(); cargarDispositivos(); return; }
   if (a === 'revision') { if (!S.rev) iniciarRevision(); ov.innerHTML = vistaRevision(); return; }
@@ -1668,6 +1669,7 @@ function vistaMenu() {
     <div><a class="btn link" href="#/resumen" data-reemplazar>Resumen del día</a></div>
     <div><a class="btn link" href="#/revision" data-reemplazar>Revisión semanal</a></div>
     <div><a class="btn link" href="#/historial" data-reemplazar>Historial y papelera</a></div>
+    <div><a class="btn link" href="#/importar" data-reemplazar>Importar notas desde CSV</a></div>
     <div><a class="btn link" href="#/ajustes" data-reemplazar>Ajustes</a></div>
     <div><button class="btn link" data-act="pdf-reunion">PDF para reunión</button></div>
     <div><button class="btn link" data-act="imprimir-lista">PDF de la lista actual</button></div>
@@ -1872,6 +1874,17 @@ function propuestaDe(n, a) {
 function vistaRevisionDictado() {
   const D = dic();
   const incl = D.propuestas.filter(p => p.incluir).length;
+  if (D.csv) {
+    const malas = D.propuestas.filter(p => p.avisos.length).length;
+    const cuerpo = `<div class="banner"><span class="grow"><b>${D.propuestas.length === 1 ? 'Se ha leído 1 nota' : 'Se han leído ' + D.propuestas.length + ' notas'}</b> de «${esc(D.csv.nombre)}». Revisa y corrige antes de guardar.</span></div>
+      ${malas ? `<div class="banner warn"><span class="grow">${malas === 1 ? '1 fila tiene' : malas + ' filas tienen'} datos que no se han podido leer. Están marcadas en naranja.</span></div>` : ''}
+      ${D.csv.demas ? `<div class="banner warn"><span class="grow">Solo se importan ${CSV_MAX} filas cada vez; se han dejado fuera ${D.csv.demas}.</span></div>` : ''}
+      ${D.propuestas.map((p, i) => tarjetaPropuesta(p, i)).join('')}
+      <p class="hint">Las etiquetas y responsables en naranja no existen todavía. Solo se crean si pulsas Crear.</p>`;
+    const pie = `<button class="btn" data-act="dic-descartar">Descartar</button>
+      <button class="btn primary" data-act="dic-guardar" ${incl ? '' : 'disabled'}>Guardar ${incl} ${incl === 1 ? 'nota' : 'notas'}</button>`;
+    return pagina('Revisar importación', cuerpo, pie);
+  }
   const textos = [...new Set(D.propuestas.map(p => p.transcripcion))].filter(Boolean);
   const cuerpo = `<div class="banner"><span class="grow"><b>${D.propuestas.length === 1 ? 'Claude ha preparado 1 nota' : 'Claude ha preparado ' + D.propuestas.length + ' notas'}.</b> Revisa y corrige antes de guardar.</span></div>
     <details class="card"><summary style="font-weight:600;color:var(--primary);cursor:pointer">Ver lo que se ha transcrito</summary><p style="white-space:pre-wrap;margin:0">${esc(textos.join('\n\n'))}</p></details>
@@ -1884,7 +1897,7 @@ function vistaRevisionDictado() {
 function tarjetaPropuesta(p, i) {
   const tags = p.etiquetas.map(etq).filter(Boolean);
   return `<article class="card propuesta p-${p.prioridad} ${p.incluir ? '' : 'off'}">
-    <div class="top"><span class="grow">Nota ${i + 1}</span>
+    <div class="top"><span class="grow">${p.fila ? 'Fila ' + p.fila : 'Nota ' + (i + 1)}</span>
       <select data-p="${i}" data-f="prioridad" aria-label="Prioridad">${PRIOS.map(x => `<option value="${x}" ${p.prioridad === x ? 'selected' : ''}>${PRIO_N[x]}</option>`).join('')}</select>
       <label class="check" style="min-height:36px"><input type="checkbox" data-p="${i}" data-f="incluir" ${p.incluir ? 'checked' : ''}>Incluir</label></div>
     <input class="input" data-p="${i}" data-f="titulo" value="${esc(p.titulo)}" aria-label="Título">
@@ -1892,6 +1905,10 @@ function tarjetaPropuesta(p, i) {
     <div class="tags-edit">${tags.map(t => `<span class="tag">#${esc(t.nombre)}<button data-act="p-quitar-tag" data-p="${i}" data-id="${esc(t.id)}" aria-label="Quitar">×</button></span>`).join('')}
       ${p.nuevas.filter(n => n.decision === 'crear').map(n => `<span class="tag nueva">+ #${esc(n.nombre)}</span>`).join('')}
       <select class="input" data-p="${i}" data-f="add-tag" style="width:auto;min-height:34px;padding:0 6px" aria-label="Añadir etiqueta"><option value="">+ Etiqueta</option>${S.etiquetas.filter(e => !e.cerrada && !p.etiquetas.includes(e.id)).map(e => `<option value="${esc(e.id)}">#${esc(e.nombre)}</option>`).join('')}</select></div>
+    ${(p.avisos || []).length ? `<div class="nueva-box"><div>⚠ ${p.avisos.map(esc).join(' · ')}</div></div>` : ''}
+    ${p.personaNueva && !p.personaNueva.decision && !p.persona_id ? `<div class="nueva-box"><div>El responsable <b>${esc(p.personaNueva.nombre)}</b> no existe.</div>
+      <div class="acts"><button class="btn small orange" data-act="p-per-nueva" data-p="${i}" data-v="crear">Crear ${esc(p.personaNueva.nombre)}</button>
+      <button class="btn small link" data-act="p-per-nueva" data-p="${i}" data-v="descartar">Sin responsable</button></div></div>` : ''}
     ${p.evidencias.length ? `<div class="hint">${p.evidencias.map(e => `Oído «${esc(e.oido)}» → #${esc(e.etiqueta)}`).join(' · ')}</div>` : ''}
     ${p.nuevas.filter(n => !n.decision).map((n, j) => `<div class="nueva-box"><div><b>#${esc(n.nombre)}</b> no existe${n.oido ? ` (oído «${esc(n.oido)}»)` : ''}.${n.similar ? ` La más parecida que ya tienes es #${esc(n.similar)}.` : ''}</div>
       <div class="acts"><button class="btn small orange" data-act="p-nueva" data-p="${i}" data-n="${esc(n.nombre)}" data-v="crear">Crear #${esc(n.nombre)}</button>
@@ -1902,15 +1919,24 @@ function tarjetaPropuesta(p, i) {
       <div class="field"><small>Hora</small>${selectorHora(p.hora_limite, String(i))}</div>
     </div>
     <div class="grid2">
-      <label class="field"><small>Asignar a</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">Nadie</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
+      <label class="field"><small>Responsable</small><select class="input" data-p="${i}" data-f="persona_id"><option value="">${p.personaNueva && p.personaNueva.decision === 'crear' ? esc(p.personaNueva.nombre) + ' (nuevo)' : 'Nadie'}</option>${S.personas.map(x => `<option value="${esc(x.id)}" ${p.persona_id === x.id ? 'selected' : ''}>${esc(x.nombre)}</option>`).join('')}</select></label>
       <label class="field"><small>Aviso previo</small><select class="input" data-p="${i}" data-f="aviso"><option value="">Ninguno</option>${Object.keys(AVISO_RANGO).map(u => `<optgroup label="${AVISO_N[u][1][0].toUpperCase() + AVISO_N[u][1].slice(1)}">${Array.from({ length: AVISO_RANGO[u] }, (_, j) => j + 1).map(c => `<option value="${u}:${c}" ${p.aviso_unidad === u && p.aviso_cant === c ? 'selected' : ''}>${textoAntelacion(u, c)}</option>`).join('')}</optgroup>`).join('')}</select></label>
     </div>
     ${p.checklist.length ? `<label class="field"><small>Checklist · un punto por línea</small><textarea class="input" rows="${Math.min(p.checklist.length + 1, 8)}" data-p="${i}" data-f="checklist" style="min-height:64px">${esc(p.checklist.map(x => x.t).join('\n'))}</textarea></label>` : ''}
     <div class="grid2">
-      <label class="field"><small>Duración · ${p.durDefecto ? 'por defecto' : 'la que se ha entendido'}</small><select class="input" data-p="${i}" data-f="duracion">${[...new Set([...DURACIONES.map(x => x[0]), p.duracion])].sort((a, b) => a - b).map(m => `<option value="${m}" ${p.duracion === m ? 'selected' : ''}>${textoDuracion(m)}</option>`).join('')}</select></label>
+      <label class="field"><small>Duración · ${p.durDefecto ? 'por defecto' : p.fila ? 'la del archivo' : 'la que se ha entendido'}</small><select class="input" data-p="${i}" data-f="duracion">${[...new Set([...DURACIONES.map(x => x[0]), p.duracion])].sort((a, b) => a - b).map(m => `<option value="${m}" ${p.duracion === m ? 'selected' : ''}>${textoDuracion(m)}</option>`).join('')}</select></label>
       <label class="field"><small>Repetir</small><select class="input" data-p="${i}" data-f="repetir">${REPETIR_N.map(([v, t]) => `<option value="${v}" ${(p.repetir || '') === v ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
     </div>
   </article>`;
+}
+function crearPersonaLocal(nombre) {
+  const existe = S.personas.find(x => norm(x.nombre) === norm(nombre));
+  if (existe) return existe;
+  const p = { id: uid(), nombre, cargo: '' };
+  S.personas.push(p);
+  encolar({ kind: 'persona', method: 'POST', path: '/personas', body: p });
+  guardarLocal();
+  return p;
 }
 async function guardarDictado() {
   const D = dic();
@@ -1918,16 +1944,19 @@ async function guardarDictado() {
   const audios = new Set();
   for (const p of D.propuestas.filter(x => x.incluir)) {
     const ids = [...p.etiquetas];
+    let personaId = p.persona_id || null;
+    if (!personaId && p.personaNueva && p.personaNueva.decision === 'crear') personaId = crearPersonaLocal(p.personaNueva.nombre).id;
     for (const x of p.nuevas) {
       if (x.decision === 'crear') ids.push(crearEtiquetaLocal(x.nombre).id);
       if (x.decision === 'usar' && x.similar) { const e = S.etiquetas.find(e => norm(e.nombre) === norm(x.similar)); if (e) ids.push(e.id); }
     }
     crearNotaLocal({
-      titulo: p.titulo.trim() || 'Nota dictada', cuerpo: p.cuerpo.trim(), prioridad: p.prioridad, etiquetas: [...new Set(ids)],
-      persona_id: p.persona_id || null, ...camposFecha(p), duracion: p.duracion || null, checklist: checklistGuardar(p),
-      origen: 'voz', origen_ref: p.audio, transcripcion: p.transcripcion,
+      titulo: p.titulo.trim() || (D.csv ? 'Nota importada' : 'Nota dictada'), cuerpo: p.cuerpo.trim(), prioridad: p.prioridad, etiquetas: [...new Set(ids)],
+      persona_id: personaId, ...camposFecha(p), duracion: p.duracion || null, checklist: checklistGuardar(p),
+      ...(D.csv ? { origen: 'csv', origen_ref: D.csv.nombre } : { origen: 'voz', origen_ref: p.audio, transcripcion: p.transcripcion }),
     });
-    audios.add(p.audio); n++;
+    if (p.audio) audios.add(p.audio);
+    n++;
   }
   for (const a of S.audios) if (audios.has(a.id)) a.estado = 'guardado';
   await guardarAudios();
@@ -1935,6 +1964,176 @@ async function guardarDictado() {
   renderBase();
   location.hash = '#/';
   toast(n === 1 ? 'Nota guardada' : n + ' notas guardadas');
+}
+// ---------- Importar notas desde un CSV ----------
+// El archivo se lee en el dispositivo y las notas pasan por la misma pantalla de revisión que el dictado
+// (S.dic con csv), en la ruta #/importar. Se guardan con crearNotaLocal, así que funciona sin conexión.
+const CSV_COLS = ['Título', 'Descripción', 'Prioridad', 'Fecha límite', 'Hora', 'Responsable', 'Etiquetas', 'Aviso previo', 'Duración (min)', 'Repetir', 'Checklist'];
+const CSV_CAMPOS = [['titulo', ['titulo', 'title', 'tarea', 'asunto']], ['cuerpo', ['descripcion', 'detalle', 'cuerpo', 'nota']], ['prioridad', ['prioridad']],
+  ['fecha', ['fecha']], ['hora', ['hora']], ['responsable', ['responsable', 'asignad', 'persona']], ['etiquetas', ['etiqueta']], ['aviso', ['aviso']],
+  ['duracion', ['duracion']], ['repetir', ['repet']], ['checklist', ['checklist', 'pasos', 'puntos']]];
+const CSV_MAX = 500;
+
+function plantillaCsv() {
+  const f = d => { const x = new Date(Date.now() + d * DIA); return pad2(x.getDate()) + '/' + pad2(x.getMonth() + 1) + '/' + x.getFullYear(); };
+  const filas = [CSV_COLS,
+    ['Revisar encofrado planta 2', 'Con el encargado antes de hormigonar', 'Urgente', f(1), '9:30', (S.personas[0] || {}).nombre || '', (S.etiquetas.find(e => !e.cerrada) || {}).nombre || '', '2 horas', '60', '', ''],
+    ['Pedir ofertas de carpintería', '', 'Normal', f(7), '', '', '', '1 día', '', '', 'Puertas Vidal | Carpintería Roca | Alumisa'],
+  ];
+  const celda = v => /[";\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  const txt = '﻿' + filas.map(r => r.map(celda).join(';')).join('\r\n') + '\r\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'plantilla-notas.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+// CSV con comillas, "" dentro de comillas y saltos de línea en celdas. Separador «;» (Excel en España) o «,».
+function leerCsv(texto) {
+  texto = texto.replace(/^﻿/, '');
+  const linea1 = texto.split(/\r?\n/, 1)[0].replace(/"[^"]*"/g, '');
+  const sep = (linea1.match(/;/g) || []).length >= (linea1.match(/,/g) || []).length ? ';' : ',';
+  const filas = []; let fila = [], celda = '', comillas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
+    if (comillas) {
+      if (c === '"') { if (texto[i + 1] === '"') { celda += '"'; i++; } else comillas = false; }
+      else celda += c;
+    } else if (c === '"') comillas = true;
+    else if (c === sep) { fila.push(celda); celda = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && texto[i + 1] === '\n') i++; fila.push(celda); filas.push(fila); fila = []; celda = ''; }
+    else celda += c;
+  }
+  if (celda || fila.length) { fila.push(celda); filas.push(fila); }
+  return filas.map(r => r.map(x => x.trim())).filter(r => r.some(Boolean));
+}
+function csvFecha(v) {
+  if (!v) return { v: '' };
+  let m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/), y, mo, d;
+  if (m) [, y, mo, d] = m.map(Number);
+  else if ((m = v.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{2}|\d{4})$/))) { [, d, mo, y] = m.map(Number); if (y < 100) y += 2000; }
+  else return { error: `fecha «${v}» no válida (usa dd/mm/aaaa)` };
+  const x = new Date(y, mo - 1, d);
+  if (x.getFullYear() !== y || x.getMonth() !== mo - 1 || x.getDate() !== d) return { error: `fecha «${v}» no existe` };
+  return { v: `${y}-${pad2(mo)}-${pad2(d)}` };
+}
+function csvHora(v) {
+  if (!v) return { v: '' };
+  const m = v.match(/^(\d{1,2})(?:[:.h](\d{2}))?(?::\d{2})?\s*h?$/i);
+  if (!m || Number(m[1]) > 23 || Number(m[2] || 0) > 59) return { error: `hora «${v}» no válida (usa 9:30)` };
+  return { v: pad2(Number(m[1])) + ':' + (m[2] || '00') };
+}
+function csvAviso(v) {
+  if (!v) return { u: '', c: 0 };
+  const t = norm(v), m = t.match(/(\d+)\s*(h|hora|horas|d|dia|dias|s|sem|semana|semanas)\b/) || t.match(/^(una?)\s+(hora|dia|semana)\b/);
+  if (!m) return { error: `aviso «${v}» no válido (por ejemplo «1 día»)` };
+  const c = /^\d+$/.test(m[1]) ? Number(m[1]) : 1, u = m[2][0];
+  if (c < 1 || c > AVISO_RANGO[u]) return { error: `aviso «${v}» fuera de rango (1-12 horas, 1-7 días o 1-4 semanas)` };
+  return { u, c };
+}
+function csvDuracion(v) {
+  if (!v) return { v: 0 };
+  const m = norm(v).replace(',', '.').match(/^(\d+(?:\.\d+)?)\s*(h|horas?|min|minutos?|m)?$/);
+  if (!m) return { error: `duración «${v}» no válida (minutos)` };
+  const min = Math.round(Number(m[1]) * (m[2] && m[2][0] === 'h' ? 60 : 1));
+  return min > 0 && min <= 1440 ? { v: min } : { error: `duración «${v}» fuera de rango` };
+}
+function csvRepetir(v) {
+  const t = norm(v);
+  if (!t || /^(no|ninguno|nunca)$/.test(t)) return { v: '' };
+  if (/laborable|diari|cada dia|todos los dias/.test(t)) return { v: 'laborables' };
+  if (/quincen|2 semanas|dos semanas/.test(t)) return { v: 'quincenal' };
+  if (/seman/.test(t)) return { v: 'semanal' };
+  if (/mes|mensual/.test(t)) return { v: 'mensual' };
+  return { error: `repetir «${v}» no válido (laborables, semanal, quincenal o mensual)` };
+}
+function csvPrioridad(v) {
+  const t = norm(v);
+  if (!t || t === 'normal') return { v: 'normal' };
+  if (/^(urgente|critica|critico)/.test(t)) return { v: 'critica' };
+  if (/^alta/.test(t)) return { v: 'alta' };
+  if (/^baja/.test(t)) return { v: 'baja' };
+  return { v: 'normal', error: `prioridad «${v}» desconocida (se pone Normal)` };
+}
+// Etiqueta que no existe: se propone crearla (sin espacios) indicando la más parecida que ya hay.
+function csvEtiquetaNueva(nombre) {
+  const n = nombre.replace(/\s+/g, '_').replace(/[^\p{L}\p{N}_\-]/gu, '').slice(0, 60);
+  const k = norm(n), sim = S.etiquetas.find(e => !e.cerrada && k.length >= 3 && (norm(e.nombre).includes(k) || k.includes(norm(e.nombre))));
+  return n ? { nombre: n, similar: sim ? sim.nombre : '', oido: '', decision: '' } : null;
+}
+function propuestasCsv(filas) {
+  if (!filas.length) return [];
+  const cab = filas[0].map(norm), idx = {};
+  CSV_CAMPOS.forEach(([k, claves]) => { const i = cab.findIndex(h => claves.some(c => h.startsWith(c))); if (i >= 0 && !Object.values(idx).includes(i)) idx[k] = i; });
+  const conCabecera = 'titulo' in idx;
+  if (!conCabecera) CSV_CAMPOS.forEach(([k], i) => { idx[k] = i; });   // sin cabecera: el orden de la plantilla
+  const out = [];
+  (conCabecera ? filas.slice(1) : filas).slice(0, CSV_MAX).forEach((r, j) => {
+    const v = k => (idx[k] != null ? r[idx[k]] || '' : '').trim();
+    const avisos = [];
+    let titulo = v('titulo');
+    const cuerpo = v('cuerpo');
+    if (!titulo && !cuerpo) return;
+    if (!titulo) { titulo = cuerpo.split(/\s+/).slice(0, 8).join(' '); avisos.push('sin título: se ha usado el principio de la descripción'); }
+    const pr = csvPrioridad(v('prioridad')), fe = csvFecha(v('fecha')), ho = csvHora(v('hora')), av = csvAviso(v('aviso')), du = csvDuracion(v('duracion')), re = csvRepetir(v('repetir'));
+    [pr, fe, ho, av, du, re].forEach(x => x.error && avisos.push(x.error));
+    if (!fe.v && !fe.error && (ho.v || av.u)) avisos.push('la hora y el aviso necesitan fecha límite');
+    const etiquetas = [], nuevas = [];
+    for (const nom of v('etiquetas').split(/[,;|]+/).map(x => x.replace(/^#/, '').trim()).filter(Boolean)) {
+      const e = S.etiquetas.find(e => norm(e.nombre) === norm(nom) || norm(e.nombre) === norm(nom.replace(/\s+/g, '_')));
+      if (e) { if (!etiquetas.includes(e.id)) etiquetas.push(e.id); }
+      else { const x = csvEtiquetaNueva(nom); if (x && !nuevas.some(y => norm(y.nombre) === norm(x.nombre))) nuevas.push(x); }
+    }
+    const resp = v('responsable'), p = resp && S.personas.find(x => norm(x.nombre) === norm(resp));
+    out.push({
+      k: uid(), incluir: true, fila: (conCabecera ? 2 : 1) + j, avisos, audio: null, transcripcion: '',
+      titulo: titulo.slice(0, 200), cuerpo, prioridad: pr.v, etiquetas, evidencias: [], nuevas,
+      persona_id: p ? p.id : '', personaNueva: resp && !p ? { nombre: resp.slice(0, 80), decision: '' } : null,
+      fecha_limite: fe.v || '', hora_limite: fe.v ? ho.v || '' : '', aviso_unidad: fe.v ? av.u || '' : '', aviso_cant: fe.v ? av.c || 0 : 0,
+      duracion: du.v || DURACION_DEF, durDefecto: !du.v,
+      checklist: v('checklist').split(/\s*[|\n]\s*/).filter(Boolean).map(t => ({ t: t.slice(0, 200), hecho: false })), repetir: re.v || '',
+    });
+  });
+  return out;
+}
+async function importarCsv(file) {
+  if (!file) return;
+  if (S.dic && S.dic.fase === 'revision' && !S.dic.csv && !confirm('Tienes un dictado sin guardar. Si importas el CSV, se descartarán esas notas propuestas. ¿Seguir?')) return;
+  try {
+    const buf = await file.arrayBuffer();
+    let texto;
+    try { texto = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { texto = new TextDecoder('windows-1252').decode(buf); }
+    const filas = leerCsv(texto);
+    const propuestas = propuestasCsv(filas);
+    if (!propuestas.length) { toast('No se ha encontrado ninguna nota en el archivo. Comprueba que tiene la columna Título.'); return; }
+    S.dic = { fase: 'revision', propuestas, msg: '', segs: 0, csv: { nombre: file.name.slice(0, 120), demas: Math.max(0, filas.length - 1 - CSV_MAX) } };
+    if (ruta() === 'importar') renderOverlay(); else location.hash = '#/importar';
+  } catch (e) { toast('No se ha podido leer el archivo: ' + e.message); }
+}
+function vistaImportar() {
+  const cuerpo = `<section class="card"><h2>Importar notas desde un CSV</h2>
+      <p>Prepara las notas en Excel, una por fila, y guarda el archivo como <b>CSV</b>. Antes de guardarlas podrás revisarlas una a una.</p>
+      <ol class="hint" style="margin:0;padding-left:18px">
+        <li>Descarga la plantilla y ábrela con Excel.</li>
+        <li>Rellena una fila por nota. Solo el <b>Título</b> es obligatorio.</li>
+        <li>Guárdala como «CSV UTF-8» o «CSV (delimitado por comas)».</li>
+        <li>Pulsa «Elegir archivo CSV».</li></ol>
+      <div class="row"><button class="btn" data-act="csv-plantilla">Descargar plantilla</button>
+        <label class="btn primary">Elegir archivo CSV<input type="file" accept=".csv,text/csv,text/plain" data-csv hidden></label></div></section>
+    <section class="card"><h2>Columnas</h2><div class="list-plain">
+      <div><span class="grow"><b>Título</b><small>Obligatorio</small></span></div>
+      <div><span class="grow"><b>Descripción</b><small>Texto libre</small></span></div>
+      <div><span class="grow"><b>Prioridad</b><small>Urgente, Alta, Normal o Baja</small></span></div>
+      <div><span class="grow"><b>Fecha límite</b><small>20/10/2026</small></span></div>
+      <div><span class="grow"><b>Hora</b><small>9:30</small></span></div>
+      <div><span class="grow"><b>Responsable</b><small>El nombre, como en la app (si no existe, podrás crearlo)</small></span></div>
+      <div><span class="grow"><b>Etiquetas</b><small>Separadas por comas: Mallorca245, Estructura</small></span></div>
+      <div><span class="grow"><b>Aviso previo</b><small>«2 horas», «1 día» o «1 semana» antes</small></span></div>
+      <div><span class="grow"><b>Duración (min)</b><small>60</small></span></div>
+      <div><span class="grow"><b>Repetir</b><small>laborables, semanal, quincenal o mensual</small></span></div>
+      <div><span class="grow"><b>Checklist</b><small>Puntos separados por «|»: Punto 1 | Punto 2</small></span></div>
+    </div></section>`;
+  return pagina('Importar notas', cuerpo, '');
 }
 async function limpiarAudios() {
   const lim = Date.now() - AUDIO_DIAS * DIA;
@@ -2110,6 +2309,10 @@ function vistaAjustes() {
     <p class="hint">Solo llega si hay algo urgente, con hora hoy o sin tocar desde hace más de ${ESTANCADA_DIAS} días. <a href="#/resumen" data-reemplazar>Ver el resumen de hoy</a></p>
   </section>
 
+  <section class="card"><h2>Importar notas</h2>
+    <p class="hint">Añade muchas notas de golpe desde un archivo CSV hecho con Excel.</p>
+    <div class="row"><a class="btn" href="#/importar">Importar desde CSV</a><button class="btn link" data-act="csv-plantilla">Descargar plantilla</button></div>
+  </section>
   <section class="card"><h2>Copia de seguridad</h2>
     <p class="hint">Descarga todas tus notas, etiquetas, personas y grupos en un archivo.</p>
     <div class="row"><button class="btn" data-act="exportar">Descargar copia</button></div>
@@ -2375,10 +2578,21 @@ const ACT = {
   },
   'dic-mas': () => { dic().fase = 'listo'; renderOverlay(); },
   'dic-volver-revision': () => { dic().fase = 'revision'; renderOverlay(); },
-  'dic-descartar': () => { if (!confirm('¿Descartar las notas propuestas? El audio sigue guardado unos días por si quieres volver a analizarlo.')) return; S.dic = null; location.hash = '#/'; },
+  'dic-descartar': () => { if (!confirm(dic().csv ? '¿Descartar la importación? No se guardará ninguna nota.' : '¿Descartar las notas propuestas? El audio sigue guardado unos días por si quieres volver a analizarlo.')) return; S.dic = null; location.hash = '#/'; },
   'dic-guardar': () => guardarDictado(),
   'p-quitar-tag': (el) => { const p = dic().propuestas[el.dataset.p]; p.etiquetas = p.etiquetas.filter(x => x !== el.dataset.id); renderOverlay(); },
-  'p-nueva': (el) => { const p = dic().propuestas[el.dataset.p]; const n = p.nuevas.find(x => x.nombre === el.dataset.n); if (n) n.decision = el.dataset.v; renderOverlay(); },
+  // En una importación, la decisión sobre una etiqueta o un responsable nuevo vale para todas las filas que lo traen.
+  'p-nueva': (el) => {
+    const D = dic(), lista = D.csv ? D.propuestas : [D.propuestas[el.dataset.p]];
+    for (const p of lista) { const n = p.nuevas.find(x => norm(x.nombre) === norm(el.dataset.n)); if (n) n.decision = el.dataset.v; }
+    renderOverlay();
+  },
+  'p-per-nueva': (el) => {
+    const D = dic(), nom = D.propuestas[el.dataset.p].personaNueva.nombre;
+    for (const p of D.propuestas) if (p.personaNueva && norm(p.personaNueva.nombre) === norm(nom)) p.personaNueva.decision = el.dataset.v;
+    renderOverlay();
+  },
+  'csv-plantilla': () => plantillaCsv(),
 
   // Historial
   'hist-tab': (el) => { S.ui.histTab = el.dataset.v; renderOverlay(); },
@@ -2581,6 +2795,7 @@ document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.dataset.ed && S.ed && t.type === 'checkbox') S.ed.d[t.dataset.ed] = t.checked;
   if (t.dataset.p != null && S.dic && (t.dataset.f === 'add-tag' || t.dataset.f === 'incluir')) return;
+  if (t.matches('[data-csv]')) { const f = t.files[0]; t.value = ''; importarCsv(f); return; }
   if (t.dataset.fotos) { const files = [...t.files]; t.value = ''; anadirFotos(t.dataset.fotos, files); return; }
   if (t.matches('[data-grupo-vista]')) { aplicarVista(t.value); return; }
   if (t.dataset.resumen) {
@@ -2648,6 +2863,7 @@ window.addEventListener('hashchange', () => {
   S._dentro = true;
   const r = ruta();
   if (!r.startsWith('nota')) S.ed = null;
+  if (r !== 'importar' && S.dic && S.dic.csv) S.dic = null;   // la importación sin guardar se descarta al salir
   if (r !== 'revision') S.rev = null;
   if (r !== 'dictado' && S.dic && (S.dic.fase === 'grabando' || S.dic.fase === 'pausa')) cancelarGrabacion();
   if (r !== 'historial') S._archivos = null;
