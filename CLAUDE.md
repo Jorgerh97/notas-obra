@@ -65,6 +65,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.3.1** (6 oct 2026): hora con desplegables (minutos de 5 en 5), crear nota pulsando en el calendario y aviso de worker antiguo → `docs/PENDIENTE.md`. Existe un worker antiguo `proud-salad-c6ba` con la misma base D1: no usarlo; borrarlo solo con confirmación de Jorge.
 - **1.4.0** (8 oct 2026): grupos y «Responsables» (personas) en la barra lateral para los tres modos, arrastrar notas a un responsable, ordenar grupos arrastrando, casilla de realizada en el calendario, cerrar ventanas pulsando fuera, calendario más legible y mejor hora por voz → `docs/PENDIENTE.md`.
 - **1.4.1** (13 oct 2026): arreglo de casillas y «+ Foto» dentro de las ventanas. **1.5.0** (13 oct 2026): importar notas desde CSV (`#/importar`) → `docs/PENDIENTE.md`.
+- **1.5.1** (6 nov 2026): al abrir una nota nueva, el cursor queda en el título → `docs/PENDIENTE.md`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

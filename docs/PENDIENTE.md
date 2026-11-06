@@ -23,6 +23,9 @@ Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 - Si se borra el worker antiguo `proud-salad-c6ba` (solo con su confirmación y comprobando que nadie lo usa).
 - Si ha quitado la clave antigua de Anthropic de la web y de `Anotaciones.txt`. La clave nueva se puso el 3 nov 2026.
 
+## Hecho en la versión 1.5.1 (6 nov 2026)
+- Al abrir una nota nueva, el cursor queda en el título (`S.ed.enfocar`, solo al abrir; no en notas existentes ni al repintar). En iPhone el teclado podría no abrirse solo: falta probarlo en el móvil de Jorge.
+
 ## Hecho en la versión 1.5.0 (13 oct 2026)
 - Importar notas desde CSV: página `#/importar` (Ajustes → Importar notas, y menú del móvil) con «Descargar plantilla» (`plantillaCsv`, «;» y BOM UTF-8) y «Elegir archivo CSV». `leerCsv` detecta «;» o «,», comillas y saltos de línea; UTF-8 o Windows-1252. `propuestasCsv` reconoce las columnas por su nombre (o el orden de la plantilla si no hay cabecera), máx. 500 filas.
 - Revisión con la pantalla del dictado (`S.dic.csv`): avisos por fila en naranja (fecha/hora/aviso/duración/repetir/prioridad mal escritos), responsables y etiquetas nuevos con Crear / Descartar (la decisión vale para todas las filas). Guardado con `crearNotaLocal`, origen `csv` (añadido a la lista del worker).

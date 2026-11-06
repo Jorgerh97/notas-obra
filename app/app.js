@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1354,6 +1354,8 @@ function renderOverlay() {
   S._ovRuta = r;
   const nb = $('#ov .page-body');
   if (nb && sc) nb.scrollTop = sc;
+  // Nota nueva: el cursor empieza en el título (solo al abrirla, no en cada repintado).
+  if (S.ed && S.ed.enfocar) { S.ed.enfocar = false; const t = $('[data-ed="titulo"]'); if (t) t.focus(); }
   cargarFotos($('#ov'));
 }
 function pintarOverlay() {
@@ -1394,7 +1396,7 @@ function iniciarEditor(id) {
       : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: S.ui.filtro.personas.length === 1 && per(S.ui.filtro.personas[0]) ? S.ui.filtro.personas[0] : '', fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
         aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
-    sug: null, sel: 0,
+    sug: null, sel: 0, enfocar: !n,
   };
   S.prefill = null;   // fecha y hora elegidas en el calendario: solo valen para esta nota nueva
 }
