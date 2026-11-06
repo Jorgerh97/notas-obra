@@ -1,6 +1,27 @@
 # Pendiente para la próxima actualización
 
-(Nada pendiente.)
+Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
+
+## Mejorar la transcripción con ruido de fondo (hablado el 3 nov 2026)
+- Jorge dice que a veces, con ruido, «no se puede analizar». Falta que pase el texto exacto del mensaje.
+- Hoy: `noiseSuppression` y `echoCancellation` en el micro, 32 kbps, Whisper con `vad_filter` e `initial_prompt` (solo etiquetas).
+- Propuesta recomendada:
+  1. Subir a 64 kbps, con `autoGainControl` y un solo canal.
+  2. `initial_prompt` con responsables y vocabulario de obra (encofrado, forjado, ferralla, replanteo, hormigonado…).
+  3. Si el texto sale vacío o casi vacío, reintentar sin `vad_filter`.
+  4. En la revisión, poder corregir lo transcrito y pulsar «Volver a analizar».
+- Solo si no basta: reconocedor de pago (OpenAI o Deepgram), que pide otra cuenta y otra clave.
+
+## Dictar sin abrir la app (hablado el 25 oct 2026)
+- CarPlay y Android Auto no son posibles: solo admiten apps nativas de la tienda.
+- iPhone: Atajo de Siri «Nota de obra» que envía el texto a una entrada nueva del worker; Claude lo analiza y las notas se crean directamente con la marca «Por revisar», con aviso en la app. El token se escribe en el Atajo, en el iPhone, nunca en el chat. Un Atajo que solo abra la URL no sirve: abre Safari, no la app instalada.
+- Android: `shortcuts` en el manifest («Dictar» y «Nueva nota», al mantener pulsado el icono; «Dictar» empieza a grabar al abrir) y `share_target` (Compartir → Notas de obra). «Ok Google, abre Notas de obra» solo abre la app. HTTP Shortcuts solo como último recurso.
+- Jorge aún no ha dicho si hacerlo ni cuál.
+
+## Tareas de Jorge por confirmar
+- Que el ordenador y el iPhone usan ya la URL del worker nuevo.
+- Si se borra el worker antiguo `proud-salad-c6ba` (solo con su confirmación y comprobando que nadie lo usa).
+- Si ha quitado la clave antigua de Anthropic de la web y de `Anotaciones.txt`. La clave nueva se puso el 3 nov 2026.
 
 ## Hecho en la versión 1.5.0 (13 oct 2026)
 - Importar notas desde CSV: página `#/importar` (Ajustes → Importar notas, y menú del móvil) con «Descargar plantilla» (`plantillaCsv`, «;» y BOM UTF-8) y «Elegir archivo CSV». `leerCsv` detecta «;» o «,», comillas y saltos de línea; UTF-8 o Windows-1252. `propuestasCsv` reconoce las columnas por su nombre (o el orden de la plantilla si no hay cabecera), máx. 500 filas.
