@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.5.1';
+const VERSION = '1.5.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -45,6 +45,8 @@ const hoyYmd = () => ymd(Date.now());
 const addDias = (ymdStr, n) => { const [y, m, d] = ymdStr.split('-').map(Number); return ymd(new Date(y, m - 1, d + n)); };
 const finSemana = () => { const d = new Date(); return addDias(hoyYmd(), (7 - d.getDay()) % 7); };
 const diaCorto = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, ''); };
+// «12 nov»: fecha de una nota vencida (sin día de la semana ni hora).
+const diaMes = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }).replace(/\./g, ''); };
 const diaLargo = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }); };
 const hora = iso => new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 const fechaCorta = iso => iso ? new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : '';
@@ -647,7 +649,7 @@ function textoCuando(n) {
   if (n.fecha_limite) {
     const hl = n.hora_limite ? ' ' + n.hora_limite : '';
     const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
-    partes.push(`<span class="${late ? 'late' : ''}">${late ? 'venció ' + esc((n.fecha_limite === h ? 'hoy' : diaCorto(n.fecha_limite)) + hl) : '⚑ ' + esc(relDia(n.fecha_limite) + hl)}</span>`);
+    partes.push(`<span class="${late ? 'late' : ''}">${late ? esc(diaMes(n.fecha_limite)) :'⚑ ' + esc(relDia(n.fecha_limite) + hl)}</span>`);
   }
   // El aviso de la hora límite ya se ve en la fecha; aquí solo se muestra el aviso previo.
   const enLimite = n.alarma && n.hora_limite && Date.parse(n.alarma) === momentosAviso({ fecha_limite: n.fecha_limite, hora_limite: n.hora_limite })[0];
@@ -811,12 +813,12 @@ function notasDeGrupo(conRealizadas) {
   return S.notas.filter(n => (n.estado === 'activa' || (conRealizadas && n.estado === 'realizada'))
     && cumpleFiltro(n, f) && cumpleBusqueda(n, S.ui.q));
 }
-// Fecha corta de una nota: «hoy 12:30», «⚑ vie 2 oct», «venció 25 sep» o «sin fecha».
+// Fecha corta de una nota: «hoy 12:30», «⚑ vie 2 oct», «25 sep» (vencida, en rojo) o «sin fecha».
 function cuandoCorto(n) {
   if (!n.fecha_limite) return { t: 'sin fecha', late: false };
   const h = hoyYmd(), hl = n.hora_limite ? ' ' + n.hora_limite : '';
   const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
-  if (late) return { t: 'venció ' + (n.fecha_limite === h ? 'hoy' : diaCorto(n.fecha_limite)) + hl, late };
+  if (late) return { t: diaMes(n.fecha_limite), late };
   return { t: (n.hora_limite ? '' : '⚑ ') + relDia(n.fecha_limite) + hl + (textoAviso(n) ? ' 🔔' : '') + (n.repetir ? ' ↻' : ''), late };
 }
 const ordenFecha = (a, b) => String(a.fecha_limite || '9999').localeCompare(String(b.fecha_limite || '9999'))
@@ -835,7 +837,7 @@ function vistaMatriz() {
       const c = cuandoCorto(n), tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
       return `<div class="mx-row" data-id="${esc(n.id)}" data-drag="prio" data-titulo="${esc(n.titulo)}" data-cuando="${esc(c.t)}">
         <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
-        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${n.cuerpo ? `<span class="mx-body"> — ${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
+        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${n.cuerpo ? `<span class="mx-body"><span class="mx-sep"> — </span>${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
         <span class="mx-tags desk-only">${tags}</span>
         <span class="mx-when ${c.late ? 'late' : ''}">${esc(c.t)}</span>
       </div>`;

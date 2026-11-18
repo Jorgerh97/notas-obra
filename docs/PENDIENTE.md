@@ -23,6 +23,13 @@ Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 - Si se borra el worker antiguo `proud-salad-c6ba` (solo con su confirmación y comprobando que nadie lo usa).
 - Si ha quitado la clave antigua de Anthropic de la web y de `Anotaciones.txt`. La clave nueva se puso el 3 nov 2026.
 
+## Hecho en la versión 1.5.2 (18 nov 2026)
+- Nota vencida: solo la fecha, «12 nov» (`diaMes`), sin «venció» ni hora, en rojo y negrita (Lista, Matriz y Calendario). El PDF para reunión sigue poniendo «Venció».
+- Tablet en horizontal (900-1199 px): en la Lista, título y descripción en hasta 3 líneas y la fecha encima de las etiquetas en una columna estrecha; en la Matriz, sin etiquetas y con el texto en hasta 3 líneas. Tablet en vertical (600-899 px): la Matriz muestra la descripción en una segunda línea.
+- Arreglo: en tablet la barra superior se salía por la derecha (el botón «Nueva nota» quedaba cortado).
+- Sin cambiar (Jorge no lo ha pedido): en ordenador (≥ 1200 px) la Matriz sigue dejando poco sitio a la descripción.
+- Jorge descartó cambiar el tipo de letra (bocetos en https://claude.ai/artifact/ULs1wjzaMWTEU8jTR3v2P6).
+
 ## Hecho en la versión 1.5.1 (6 nov 2026)
 - Al abrir una nota nueva, el cursor queda en el título (`S.ed.enfocar`, solo al abrir; no en notas existentes ni al repintar). En iPhone el teclado podría no abrirse solo: falta probarlo en el móvil de Jorge.
 
