@@ -4,3 +4,7 @@ shots/
 .dev.vars
 *.log
 ~$*
+
+# Copias de seguridad con datos reales: nunca al repositorio (es público)
+copias-seguridad/
+*.sql

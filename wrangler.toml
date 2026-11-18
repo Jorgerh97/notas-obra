@@ -24,3 +24,29 @@ crons = ["* * * * *"]       # cada minuto: alarmas, subida a Crítica y tarea di
 
 [vars]
 ALLOWED_ORIGIN = "https://jorgerh97.github.io"   # https://USUARIO_DE_GITHUB.github.io, sin ruta, en minúsculas
+
+# ---------- Entorno de desarrollo (Fase 4, multiusuario) ----------
+# Se publica SOLO con: npx wrangler deploy --env dev
+# Usa sus propios recursos; nunca la base ni el bucket de producción. Sin tareas programadas.
+# Secretos de este entorno: APP_TOKEN (distinto al de producción). Sin ANTHROPIC_API_KEY.
+[env.dev]
+name = "notas-obra-dev"
+workers_dev = true
+
+[env.dev.ai]
+binding = "AI"
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "notas-obra-dev-db"
+database_id = "0671f628-eadc-478b-bab4-02f492b38a54"
+
+[[env.dev.r2_buckets]]
+binding = "FOTOS"
+bucket_name = "notas-obra-fotos-dev"
+
+[env.dev.triggers]
+crons = []                  # sin avisos, subida a Urgente ni limpieza diaria en desarrollo
+
+[env.dev.vars]
+ALLOWED_ORIGIN = "http://localhost:8080"   # la app servida en local (python -m http.server 8080)
