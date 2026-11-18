@@ -31,6 +31,8 @@
 // notas.usuario_id) y los responsables con cuenta. Los responsables pueden hacer todo menos enviarla a la papelera
 // o borrarla. Etiquetas y personas son comunes a todos los usuarios. realizada_por guarda quién la dio por hecha.
 //   GET    /registro                  Tareas hechas compartidas (cada uno las suyas; el administrador, todas).
+//   POST   /personas/:id/traspasar    Solo el administrador: { usuario_id }. Las notas de esa persona pasan al usuario
+//                                     (la persona queda vinculada a él y deja de salir aparte en la app).
 //
 // Dictado (fase 2): /transcribir y /analizar gastan la cuenta de Anthropic y Workers AI de Jorge, así que solo
 // los puede usar quien tenga puede_dictar. El usuario principal lo tiene siempre; los demás empiezan sin él.
@@ -305,6 +307,37 @@ async function avisarHecha(env, nota) {
   if (!otros.length) return;
   await avisarUsuarios(env, otros, { tipo: 'info', tag: 'hecha-' + nota.id, titulo: 'Nota hecha',
     cuerpo: ((await nombreUsuario(env, env.U)) + ' ha dado por hecha: ' + nota.titulo).slice(0, 180), url: '#/nota/' + nota.id });
+}
+
+// Traspaso manual (administrador): cuando alguien que estaba como persona pasa a tener cuenta, sus notas pasan a
+// ese usuario. Se quita la persona de cada nota y entra el usuario (salvo en las notas que ya son suyas).
+async function traspasarPersona(env, personaId, usuarioId) {
+  if (!env.A) throw new HttpError(403, 'Solo el administrador puede traspasar las notas de una persona.');
+  const p = await first(env, 'SELECT id, nombre FROM personas WHERE id = ?', personaId);
+  if (!p) throw new HttpError(404, 'La persona no existe.');
+  const u = await first(env, 'SELECT id, nombre FROM usuarios WHERE id = ? AND activo = 1', usuarioId);
+  if (!u) throw new HttpError(400, 'Elige un usuario activo de la app.');
+  const notas = await all(env, `SELECT r.nota_id, n.usuario_id AS dueno FROM nota_responsables r JOIN notas n ON n.id = r.nota_id
+    WHERE r.tipo = 'persona' AND r.ref_id = ?`, personaId);
+  const t = now(), ops = [];
+  for (const n of notas) {
+    if (n.dueno !== u.id) ops.push(env.DB.prepare(`INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en) VALUES (?, 'usuario', ?, ?, ?)`)
+      .bind(n.nota_id, u.id, env.U, t));
+    ops.push(env.DB.prepare(`DELETE FROM nota_responsables WHERE nota_id = ? AND tipo = 'persona' AND ref_id = ?`).bind(n.nota_id, personaId));
+    // persona_id = la primera persona que quede (app antigua); la versión sube para que los dispositivos la recojan.
+    ops.push(env.DB.prepare(`UPDATE notas SET persona_id = (SELECT ref_id FROM nota_responsables WHERE nota_id = notas.id AND tipo = 'persona' ORDER BY asignado_en, rowid LIMIT 1),
+      actualizada = ?, version = version + 1 WHERE id = ?`).bind(t, n.nota_id));
+    ops.push(env.DB.prepare('INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(n.nota_id, env.U, t, 'Traspaso', 'traspaso:' + personaId + '>' + u.id, null));
+  }
+  ops.push(env.DB.prepare('UPDATE notas SET persona_id = NULL WHERE persona_id = ? AND id NOT IN (SELECT nota_id FROM nota_responsables)').bind(personaId));
+  ops.push(env.DB.prepare('UPDATE personas SET usuario_vinculado = ? WHERE id = ?').bind(u.id, personaId));
+  for (let i = 0; i < ops.length; i += 90) await env.DB.batch(ops.slice(i, i + 90));
+  const suyas = notas.filter(n => n.dueno !== u.id).length;
+  if (suyas && u.id !== env.U) await avisarTodos(conUsuario(env, u.id), { tipo: 'info', tag: 'traspaso-' + personaId,
+    titulo: suyas === 1 ? 'Tienes 1 nota asignada' : 'Tienes ' + suyas + ' notas asignadas',
+    cuerpo: ('Antes estaban a nombre de ' + p.nombre + '.').slice(0, 180), url: '#/' });
+  return { traspasadas: notas.length, persona: await first(env, 'SELECT id, nombre, cargo, usuario_vinculado FROM personas WHERE id = ?', personaId) };
 }
 
 // Registro de tareas hechas compartidas: notas realizadas con algún responsable con cuenta. Cada usuario ve
@@ -1233,6 +1266,7 @@ export default {
       if (parts[0] === 'personas') {
         if (M === 'POST' && parts.length === 1) { const b = await readJson(request); return json({ persona: await guardarPersona(env, isId(b.id) ? b.id : null, b) }); }
         if (M === 'PUT' && parts.length === 2) return json({ persona: await guardarPersona(env, parts[1], await readJson(request)) });
+        if (M === 'POST' && parts.length === 3 && parts[2] === 'traspasar') return json(await traspasarPersona(env, parts[1], (await readJson(request)).usuario_id));
         if (M === 'DELETE' && parts.length === 2) {
           const pe = await first(env, 'SELECT usuario_id FROM personas WHERE id = ?', parts[1]);
           if (!pe) return json({ ok: true });

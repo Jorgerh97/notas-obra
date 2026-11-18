@@ -228,6 +228,38 @@ ok(!pushes.includes('/b'), 'la repetición no envía aviso de asignación');
 nb = await notaDe(b2, 'nota_comp_1');
 r = await b2('PUT', '/notas/nota_comp_1', { titulo: nb.titulo, responsables: [], base_version: nb.version });
 ok(r.s === 200 && r.d.nota.sin_acceso === true && !(await notaDe(b2, 'nota_comp_1')), 'quien se quita de responsable deja de ver la nota');
+// ---------- Traspaso de una persona a un usuario (administrador) ----------
+r = await yo('POST', '/usuarios', { nombre: 'Pedro ya con cuenta' }); const idD = r.d.usuario.id, d4 = llamar(r.d.token);
+await d4('POST', '/push/suscribir', { ...sub('d'), nombre: 'Móvil de Pedro' });
+await yo('POST', '/personas', { id: 'persona_pedro', nombre: 'Pedro' });
+await yo('POST', '/notas', { id: 'nota_pedro_1', titulo: 'Pedir grúa', prioridad: 'normal', responsables: [{ tipo: 'persona', id: 'persona_pedro' }, { tipo: 'persona', id: 'persona_yo_1' }] });
+await b2('POST', '/notas', { id: 'nota_pedro_2', titulo: 'Revisar andamio', prioridad: 'alta', responsables: [{ tipo: 'persona', id: 'persona_pedro' }] });
+ok(!(await notaDe(d4, 'nota_pedro_1')), 'antes del traspaso, el usuario nuevo no ve las notas de la persona');
+r = await b2('POST', '/personas/persona_pedro/traspasar', { usuario_id: idD }); ok(r.s === 403, 'solo el administrador traspasa notas');
+r = await yo('POST', '/personas/persona_pedro/traspasar', { usuario_id: 'no_existe_99' }); ok(r.s === 400, 'el traspaso necesita un usuario que exista');
+pushes.length = 0;
+r = await yo('POST', '/personas/persona_pedro/traspasar', { usuario_id: idD });
+ok(r.s === 200 && r.d.traspasadas === 2 && r.d.persona.usuario_vinculado === idD, 'el administrador traspasa las notas de la persona al usuario');
+let np = await notaDe(d4, 'nota_pedro_1');
+ok(np && np.responsables.some(x => x.tipo === 'usuario' && x.id === idD) && !np.responsables.some(x => x.id === 'persona_pedro') && np.persona_id === 'persona_yo_1',
+  'en cada nota sale la persona y entra el usuario (las demás personas se quedan)');
+np = await notaDe(d4, 'nota_pedro_2');
+ok(np && np.persona_id === null && np.responsables.length === 1, 'la nota que solo tenía a esa persona queda con el usuario');
+ok(pushes.filter(x => x === '/d').length === 1, 'el usuario recibe un único aviso con sus notas nuevas (' + pushes.join(', ') + ')');
+const traspasos = await db.prepare("SELECT COUNT(*) AS n FROM cambios WHERE accion LIKE 'traspaso:%'").first();
+ok(traspasos.n === 2, 'el traspaso queda en el historial de cada nota');
+
+// ---------- Resumen matutino: también las notas compartidas asignadas ----------
+const horaMadrid = ms => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+r = await yo('POST', '/usuarios', { nombre: 'Sin notas' }); const e5 = llamar(r.d.token);
+await e5('POST', '/push/suscribir', { ...sub('e'), nombre: 'Móvil sin notas' });
+await yo('POST', '/notas', { id: 'nota_urgente_d', titulo: 'Paralizar trabajos en altura', prioridad: 'critica', responsables: [{ tipo: 'usuario', id: idD }] });
+for (const quien of [d4, e5]) await quien('PUT', '/config', { resumen_activo: '1', resumen_hora: horaMadrid(Date.now() - 60000), resumen_dias: '1,2,3,4,5,6,7' });
+pushes.length = 0;
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+ok(pushes.includes('/d'), 'resumen matutino: cuenta las notas compartidas asignadas, como las propias (' + pushes.join(', ') + ')');
+ok(!pushes.includes('/e'), 'resumen matutino: sin notas pendientes no se envía');
+
 // Borrar una persona común: solo quien la creó o el administrador
 r = await c3('DELETE', '/personas/persona_de_c'); ok(r.s === 403, 'otro usuario no puede borrar una persona común');
 r = await yo('DELETE', '/personas/persona_de_c'); ok(r.s === 200 && !(await notaDe(c3, 'nota_para_c')), 'al borrar la persona desaparece de las notas y se deja de compartir');

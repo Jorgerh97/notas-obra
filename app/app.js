@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.7.0';
+const VERSION = '1.7.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -142,6 +142,18 @@ const nombreResp = r => r.tipo === 'usuario' ? nombreUsu(r.id) : ((per(r.id) || 
 const textoResp = n => respDe(n).map(nombreResp).filter(Boolean).join(', ');
 const esMia = n => !S.usuario || !n.usuario_id || n.usuario_id === S.usuario.id;
 const esCompartida = n => !esMia(n) || respDe(n).some(r => r.tipo === 'usuario' || (per(r.id) || {}).usuario_vinculado);
+// Clave de un responsable para filtros, barra lateral y arrastres: 'u:ID' si es un usuario de la app (o una persona
+// vinculada a un usuario) e id de la persona si no tiene cuenta. Así los grupos filtrados guardados siguen valiendo.
+const claveResp = r => r.tipo === 'usuario' ? 'u:' + r.id : ((per(r.id) || {}).usuario_vinculado ? 'u:' + per(r.id).usuario_vinculado : r.id);
+const respClaves = n => [...new Set(respDe(n).map(claveResp))];
+const respDeClave = k => k.startsWith('u:') ? { tipo: 'usuario', id: k.slice(2) } : { tipo: 'persona', id: k };
+const nombreClave = k => k === 'ninguna' ? 'Sin asignar' : k.startsWith('u:') ? (k.slice(2) === yoId() ? 'Yo' : ((usu(k.slice(2)) || {}).nombre || '?')) : ((per(k) || {}).nombre || '?');
+// Responsables para elegir o filtrar: usuarios de la app («Yo» primero; solo si hay más de uno) y personas sin vincular.
+function listaResponsables() {
+  const us = (S.usuarios || []).length > 1 ? S.usuarios.map(u => ({ clave: 'u:' + u.id, nombre: u.id === yoId() ? 'Yo' : u.nombre, usuario: true, orden: u.id === yoId() ? 0 : 1 })) : [];
+  const ps = S.personas.filter(p => !p.usuario_vinculado).map(p => ({ clave: p.id, nombre: p.nombre, cargo: p.cargo, orden: 2 }));
+  return [...us, ...ps].sort((a, b) => a.orden - b.orden || a.nombre.localeCompare(b.nombre, 'es'));
+}
 // persona_id = primera persona de la lista, para un worker antiguo.
 const conResp = lista => ({ responsables: lista, persona_id: (lista.find(r => r.tipo === 'persona') || {}).id || null });
 // Borrar etiquetas o personas comunes: quien las creó o el administrador.
@@ -376,8 +388,8 @@ function cumpleFiltro(n, f) {
   }
   if (f.prioridades && f.prioridades.length && !f.prioridades.includes(n.prioridad)) return false;
   if (f.personas && f.personas.length) {
-    const ps = personasDe(n);
-    if (!(ps.length ? ps.some(x => f.personas.includes(x)) : f.personas.includes('ninguna'))) return false;
+    const ks = respClaves(n);
+    if (!(ks.length ? ks.some(x => f.personas.includes(x)) : f.personas.includes('ninguna'))) return false;
   }
   if (f.conAlarma && !(n.alarma || n.hora_limite || n.aviso_unidad)) return false;
   if (f.venceSemana) { const fe = fechaEfectiva(n); if (!fe || fe > finSemana()) return false; }
@@ -712,7 +724,7 @@ function filaNota(n) {
 
 function nombreVista() {
   const r = responsableActivo();
-  if (r) return 'Responsable: ' + ((per(r) || {}).nombre || '?');
+  if (r) return 'Responsable: ' + nombreClave(r);
   if (!S.ui.vista) return filtroActivo(S.ui.filtro) ? 'Notas filtradas' : 'Todas las notas';
   const v = S.vistas.find(x => x.id === S.ui.vista);
   return v ? v.nombre : 'Todas las notas';
@@ -726,7 +738,7 @@ function chipsFiltro() {
   const f = S.ui.filtro, out = [];
   if (f.etiquetas.length) out.push(f.etiquetas.map(id => '#' + ((etq(id) || {}).nombre || '?')).join(f.modo === 'alguna' ? ' o ' : ' y '));
   if (f.prioridades.length) out.push(f.prioridades.map(p => PRIO_N[p]).join(', '));
-  if (f.personas.length) out.push(f.personas.map(id => id === 'ninguna' ? 'Sin asignar' : (per(id) || {}).nombre).join(', '));
+  if (f.personas.length) out.push(f.personas.map(nombreClave).join(', '));
   if (f.conAlarma) out.push('Con avisos');
   if (f.venceSemana) out.push('Vencen esta semana');
   if (f.estancadas) out.push('Sin tocar 10+ días');
@@ -793,8 +805,8 @@ function renderBase() {
           <button class="chip" data-act="vista" data-id="" aria-pressed="${!cur && !filtroActivo(S.ui.filtro)}">Todas</button>
           ${S.vistas.map(v => `<button class="chip" data-act="vista" data-id="${esc(v.id)}" aria-pressed="${cur === v.id}">${esc(v.nombre)}</button>`).join('')}
         </div>
-        ${S.personas.length ? `<div class="label">Responsables</div>
-        <div class="chips">${[...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(p => `<button class="chip" data-act="responsable" data-id="${esc(p.id)}" aria-pressed="${responsableActivo() === p.id}">${esc(p.nombre)}</button>`).join('')}</div>` : ''}
+        ${listaResponsables().length ? `<div class="label">Responsables</div>
+        <div class="chips">${listaResponsables().map(x => `<button class="chip" data-act="responsable" data-id="${esc(x.clave)}" aria-pressed="${responsableActivo() === x.clave}">${x.usuario ? '👤 ' : ''}${esc(x.nombre)}</button>`).join('')}</div>` : ''}
       </div>
       <div class="main-head desk-only">
         <h2>${esc(nombreVista())}</h2>
@@ -1170,9 +1182,10 @@ const SOLTAR = {
   lista: () => null,
   // Cualquier nota soltada sobre un responsable de la barra lateral se le asigna.
   per: (st, d) => {
-    const n = nota(st.id), p = per(d.dataset.per);
-    if (!n || !p || personasDe(n).includes(p.id)) return null;
-    return { texto: `Al soltar: «${n.titulo}» se asigna a ${p.nombre}`, hacer: () => asignarNota(n.id, p.id) };
+    const n = nota(st.id), k = d.dataset.per;
+    if (!n || !k || respClaves(n).includes(k) || k === 'u:' + (n.usuario_id || yoId())) return null;   // ya es suya o ya la tiene
+    if (!k.startsWith('u:') && !per(k)) return null;
+    return { texto: `Al soltar: «${n.titulo}» se asigna a ${nombreClave(k)}`, hacer: () => asignarNota(n.id, k) };
   },
   // Ordenar los grupos de la barra lateral: se coloca encima o debajo según la mitad donde se suelte.
   grupo: (st, d) => {
@@ -1186,12 +1199,12 @@ const SOLTAR = {
       hacer: () => ordenarGrupos(orden) };
   },
 };
-function asignarNota(id, personaId) {
+function asignarNota(id, clave) {
   const n = nota(id); if (!n) return;
   const antes = respDe(n).map(r => ({ ...r }));
-  editarNotaLocal(id, conResp([...antes, { tipo: 'persona', id: personaId }]));
+  editarNotaLocal(id, conResp([...antes, respDeClave(clave)]));
   renderBase();
-  toast(`«${n.titulo}» asignada a ${(per(personaId) || {}).nombre}`, { deshacer: () => { editarNotaLocal(id, conResp(antes)); renderBase(); } });
+  toast(`«${n.titulo}» asignada a ${nombreClave(clave)}`, { deshacer: () => { editarNotaLocal(id, conResp(antes)); renderBase(); } });
 }
 function ordenarGrupos(ids) {
   S.vistas.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
@@ -1334,9 +1347,9 @@ function responsableActivo() {
 // Apartado «Responsables» de la barra lateral: pulsar uno filtra sus notas; soltar una nota encima se la asigna.
 function sideResponsables() {
   const act = responsableActivo();
-  const lista = [...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-  const items = lista.map(p => `<button class="side-item side-per" data-act="responsable" data-id="${esc(p.id)}" data-drop="per" data-per="${esc(p.id)}" aria-current="${act === p.id}">
-      <span class="avatar" aria-hidden="true">${esc(iniciales(p.nombre))}</span><span class="grow"><b>${esc(p.nombre)}</b>${p.cargo ? `<small>${esc(p.cargo)}</small>` : ''}</span><span class="n">${activas().filter(n => personasDe(n).includes(p.id)).length}</span></button>`).join('');
+  const lista = listaResponsables();
+  const items = lista.map(x => `<button class="side-item side-per" data-act="responsable" data-id="${esc(x.clave)}" data-drop="per" data-per="${esc(x.clave)}" aria-current="${act === x.clave}">
+      <span class="avatar ${x.usuario ? 'avatar-usu' : ''}" aria-hidden="true">${esc(iniciales(x.nombre))}</span><span class="grow"><b>${esc(x.nombre)}</b><small>${x.usuario ? 'Usuario de la app' : esc(x.cargo || '')}</small></span><span class="n">${activas().filter(n => respClaves(n).includes(x.clave)).length}</span></button>`).join('');
   return `<div class="side-head"><span>Responsables</span><button class="btn small" data-act="per-nueva" title="Añadir un responsable">+ Añadir</button></div>
     ${items || '<p class="hint" style="padding:4px 12px">Añade a quién sueles asignar notas para ver aquí las de cada uno.</p>'}
     ${lista.length ? '<p class="hint side-pista">Arrastra una nota encima de un nombre para asignársela.</p>' : ''}`;
@@ -1434,7 +1447,7 @@ function renderModal() {
 function pickResponsables(lista, dueno) {
   const tiene = (t, id) => lista.some(r => r.tipo === t && r.id === id);
   const usuarios = (S.usuarios || []).filter(u => u.id !== dueno).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
-  const personas = [...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const personas = [...S.personas].filter(p => !p.usuario_vinculado || tiene('persona', p.id)).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   return `<button type="button" data-act="ed-per" data-v="" aria-pressed="${!lista.length}">Nadie</button>`
     + usuarios.map(u => `<button type="button" data-act="ed-per" data-t="usuario" data-v="${esc(u.id)}" aria-pressed="${tiene('usuario', u.id)}" aria-label="${esc(u.id === yoId() ? 'Yo' : u.nombre)}, usuario de la app">👤 ${esc(u.id === yoId() ? 'Yo' : u.nombre)}</button>`).join('')
     + personas.map(p => `<button type="button" data-act="ed-per" data-t="persona" data-v="${esc(p.id)}" aria-pressed="${tiene('persona', p.id)}" title="${esc(p.cargo || '')}">${p.usuario_vinculado ? '👤 ' : ''}${esc(p.nombre)}</button>`).join('');
@@ -1453,7 +1466,7 @@ function iniciarEditor(id) {
     ruta: ruta(), id: n ? n.id : null,
     d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, responsables: respDe(n).map(r => ({ ...r })), fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
         aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', responsables: S.ui.filtro.personas.length === 1 && per(S.ui.filtro.personas[0]) ? [{ tipo: 'persona', id: S.ui.filtro.personas[0] }] : [], fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
+      : { titulo: '', cuerpo: '', prioridad: 'normal', responsables: S.ui.filtro.personas.length === 1 && S.ui.filtro.personas[0] !== 'ninguna' && S.ui.filtro.personas[0] !== 'u:' + yoId() && (S.ui.filtro.personas[0].startsWith('u:') || per(S.ui.filtro.personas[0])) ? [respDeClave(S.ui.filtro.personas[0])] : [], fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
         aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
     sug: null, sel: 0, enfocar: !n,
@@ -1678,7 +1691,7 @@ function vistaFiltros() {
       ${porTipo || '<p class="hint">Todavía no hay etiquetas. Se crean escribiendo # en una nota.</p>'}
     </section>
     <section class="field"><span class="field-label">Prioridad</span><div class="tags-edit">${PRIOS.map(p => chip('f-prio', p, f.prioridades.includes(p), PRIO_N[p])).join('')}</div></section>
-    <section class="field"><span class="field-label">Responsable</span><div class="tags-edit">${S.personas.map(p => chip('f-per', p.id, f.personas.includes(p.id), esc(p.nombre))).join('')}${chip('f-per', 'ninguna', f.personas.includes('ninguna'), 'Sin asignar')}</div></section>
+    <section class="field"><span class="field-label">Responsable</span><div class="tags-edit">${listaResponsables().map(x => chip('f-per', x.clave, f.personas.includes(x.clave), (x.usuario ? '👤 ' : '') + esc(x.nombre))).join('')}${chip('f-per', 'ninguna', f.personas.includes('ninguna'), 'Sin asignar')}</div></section>
     <section class="field"><span class="field-label">Otros</span>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="conAlarma" ${f.conAlarma ? 'checked' : ''}>Con avisos</label>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="venceSemana" ${f.venceSemana ? 'checked' : ''}>Vencen esta semana (incluye atrasadas)</label>
@@ -2414,7 +2427,7 @@ function vistaAjustes() {
   </section>
 
   <section class="card"><div class="row"><h2 class="grow">Responsables</h2><button class="btn small" data-act="per-nueva">+ Nuevo</button></div>
-    <div class="list-plain">${S.personas.map(p => `<div><span class="grow"><b>${esc(p.nombre)}</b><small>${esc(p.cargo || '')}</small></span><button class="btn small" data-act="per-editar" data-id="${esc(p.id)}">Editar</button></div>`).join('') || '<p class="hint">Añade a quién sueles asignar notas: jefe de obra, encargado, jefe de producción…</p>'}</div>
+    <div class="list-plain">${S.personas.map(p => `<div><span class="grow"><b>${esc(p.nombre)}</b><small>${esc(p.cargo || '')}${p.usuario_vinculado ? (p.cargo ? ' · ' : '') + 'Sus notas son de 👤 ' + esc(nombreUsu(p.usuario_vinculado)) : ''}</small></span><button class="btn small" data-act="per-editar" data-id="${esc(p.id)}">Editar</button></div>`).join('') || '<p class="hint">Añade a quién sueles asignar notas: jefe de obra, encargado, jefe de producción…</p>'}</div>
   </section>
 
   <section class="card"><h2>Grupos filtrados</h2>
@@ -2514,10 +2527,22 @@ function modalEtiqueta() {
     ${m.id && puedeBorrarComun(etq(m.id) || {}) ? '<button class="btn danger" data-act="me-borrar">Eliminar etiqueta</button>' : ''}`;
   return pagina(m.id ? 'Editar etiqueta' : 'Nueva etiqueta', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="me-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
 }
+// Traspaso (solo administrador): cuando esta persona ya tiene cuenta, sus notas pasan a su usuario.
+function bloqueTraspaso(p) {
+  if (!p || !S.usuario || !S.usuario.admin || (S.usuarios || []).length < 2) return '';
+  if (p.usuario_vinculado) return `<p class="hint">Sus notas ya son de 👤 ${esc(nombreUsu(p.usuario_vinculado))}.</p>`;
+  const n = S.notas.filter(x => personasDe(x).includes(p.id)).length;
+  return `<div class="card traspaso"><b>¿Ya tiene cuenta en la app?</b>
+    <p class="hint">Sus notas (${n} que ves tú) pasan a ese usuario, que las verá y recibirá un aviso. Después, ${esc(p.nombre)} sale en la app como ese usuario.</p>
+    <label class="field"><small>Usuario de la app</small><select class="input" id="mp-traspaso"><option value="">Elige un usuario</option>
+      ${S.usuarios.filter(u => u.id !== yoId()).map(u => `<option value="${esc(u.id)}">${esc(u.nombre)}</option>`).join('')}</select></label>
+    <button class="btn" data-act="mp-traspasar">Pasar sus notas a ese usuario</button></div>`;
+}
 function modalPersona() {
   const m = S.modal, p = m.id ? per(m.id) : { nombre: '', cargo: '' };
   const cuerpo = `<label class="field"><span>Nombre</span><input class="input" id="mp-nombre" value="${esc(p.nombre)}" placeholder="Encargado, Jordi…"></label>
     <label class="field"><span>Cargo <small>(opcional)</small></span><input class="input" id="mp-cargo" value="${esc(p.cargo || '')}" placeholder="Jefe de producción"></label>
+    ${m.id ? bloqueTraspaso(per(m.id)) : ''}
     ${m.id && puedeBorrarComun(per(m.id) || {}) ? '<button class="btn danger" data-act="mp-borrar">Eliminar responsable</button>' : ''}`;
   return pagina(m.id ? 'Editar responsable' : 'Nuevo responsable', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="mp-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
 }
@@ -2831,6 +2856,18 @@ const ACT = {
       if (S.ed && ruta().startsWith('nota')) S.ed.d.responsables = [...S.ed.d.responsables, { tipo: 'persona', id: p.id }];   // creado desde la nota: se le asigna
     }
     guardarLocal(); S.modal = null; renderModal(); renderOverlay(); renderBase();
+  },
+  'mp-traspasar': async () => {
+    const p = per(S.modal.id), uid = ($('#mp-traspaso') || {}).value;
+    if (!uid) { toast('Elige el usuario de la app.'); return; }
+    if (!confirm(`¿Pasar todas las notas de ${p.nombre} a ${nombreUsu(uid)}? ${nombreUsu(uid)} las verá y recibirá un aviso.`)) return;
+    try {
+      const r = await api('/personas/' + p.id + '/traspasar', { method: 'POST', body: { usuario_id: uid } });
+      S.modal = null; renderModal();
+      await sincronizar();
+      toast(r.traspasadas === 1 ? '1 nota pasada a ' + nombreUsu(uid) : r.traspasadas + ' notas pasadas a ' + nombreUsu(uid));
+      renderOverlay(); renderBase();
+    } catch (e) { toast('No se ha podido hacer el traspaso: ' + e.message + (e.red ? ' Hace falta conexión.' : '')); }
   },
   'mp-borrar': () => {
     const p = per(S.modal.id);
