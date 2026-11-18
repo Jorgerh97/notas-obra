@@ -8,7 +8,7 @@ Jorge, jefe de obra de una empresa contratista en Barcelona. No es programador.
 - Cuando termines una tarea, dile en pocas líneas qué ha cambiado y qué tiene que probar él.
 
 ## Qué es la app
-PWA de notas y tareas de obra, escritas o dictadas, con prioridades, etiquetas, alarmas push y funcionamiento sin conexión. Un solo usuario por ahora, pero los datos llevan `usuario_id = 'yo'` para añadir más usuarios en el futuro.
+PWA de notas y tareas de obra, escritas o dictadas, con prioridades, etiquetas, alarmas push y funcionamiento sin conexión. **Multiusuario desde la 1.7.1 (18 nov 2026)**: cada usuario tiene su token; el `APP_TOKEN` es el usuario `yo` (Jorge, administrador). Las notas se comparten por responsables (usuarios de la app) y hay registro de tareas hechas. Diseño y estado: `docs/FASE3-COMPARTIR.md`, `docs/PENDIENTE.md` (apartado «Versión multiusuario») y `docs/PASO-PRODUCCION.md`.
 
 ## Arquitectura
 | Pieza | Dónde | Notas |
@@ -21,13 +21,14 @@ PWA de notas y tareas de obra, escritas o dictadas, con prioridades, etiquetas, 
 | Claude | API de Anthropic | Modelo `claude-sonnet-5` (variable `MODEL` opcional). Solo para analizar dictados. |
 
 Variables del worker: `ANTHROPIC_API_KEY` (secret), `APP_TOKEN` (secret), `ALLOWED_ORIGIN` (en `wrangler.toml`, `https://USUARIO.github.io` sin ruta).
+**Entorno de desarrollo** `--env dev` (worker `notas-obra-dev`, D1 `notas-obra-dev-db`, R2 `notas-obra-fotos-dev`, sin cron, `ALLOWED_ORIGIN = http://localhost:8080`, su propio `APP_TOKEN`, sin `ANTHROPIC_API_KEY`). Prueba ahí todo antes de producción. Copias de seguridad de producción en `../copias-seguridad/` (fuera del repositorio, que es público; `*.sql` está en `.gitignore`). Scripts de Jorge en la carpeta padre: `comprobar-dev.ps1` y `crear-usuario-dev.ps1` (con `-Entorno prod` para producción).
 Cron `* * * * *`: alarmas vencidas → push; cada 15 min sube a Crítica lo que vence en <24 h; una vez al día (≥ 3:00 hora de Madrid) purga papelera, archiva y borra realizadas caducadas, avisa a 30 y 7 días y limpia el historial de cambios.
 
-### Worker (resumen de la API, todas con `Authorization: Bearer APP_TOKEN`)
+### Worker (resumen de la API, todas con `Authorization: Bearer TOKEN` del usuario; además `/yo`, `/usuarios` (administrador), `/personas/:id/traspasar` (administrador) y `/registro`)
 `GET /estado`, `GET /datos`, `POST /notas` (idempotente por id), `PUT /notas/:id` (con `base_version`; 409 `{conflicto, servidor}` si no coincide; `forzar: true` para imponerla), `DELETE /notas/:id` (solo papelera), `POST /notas/:id/alarma` (`hecha` | `posponer`), `POST /notas/conservar`, `POST /papelera/vaciar`, `/etiquetas` (409 si nombre duplicado sin distinguir mayúsculas ni acentos; `cerrada: true` en una obra archiva un informe), `/personas`, `/vistas`, `PUT /vistas-orden`, `PUT /config` (claves en `CONFIG_PUBLICA`), `POST /transcribir` (audio binario), `POST /analizar` (tool `guardar_notas`), `/push/clave`, `/push/suscribir`, `/dispositivos`, `/push/prueba`, `/archivos`, `/exportar`.
 Web Push implementado a mano (VAPID ES256 generada y guardada en `config`, cifrado aes128gcm). Los mensajes `cerrar` no se envían a `push.apple.com` (Safari retira el permiso si no se muestra notificación).
 
-Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite` 'HH:MM', `aviso_unidad` h/d/s y `aviso_cant`, `alarma` = próximo aviso pendiente calculado por el worker, `borrar_en`, `aviso30/7`), `etiquetas` (`tipo`: obra, industrial, accion, responsable, otra; `alias`; `cerrada`), `nota_etiquetas`, `personas`, `vistas` (grupos filtrados, `filtro` JSON), `cambios` (90 días), `suscripciones`, `config`, `archivos` (informes HTML).
+Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite` 'HH:MM', `aviso_unidad` h/d/s y `aviso_cant`, `alarma` = próximo aviso pendiente calculado por el worker, `borrar_en`, `aviso30/7`), `etiquetas` (`tipo`: obra, industrial, accion, responsable, otra; `alias`; `cerrada`), `nota_etiquetas`, `personas`, `vistas` (grupos filtrados, `filtro` JSON), `cambios` (90 días), `suscripciones`, `config`, `archivos` (informes HTML). Multiusuario: `usuarios` (huella SHA-256 del token, `admin`, `activo`, `puede_dictar`), `config_usuario`, `nota_responsables` (tipo `usuario` o `persona`), `notas.realizada_por`, `personas.usuario_vinculado`, `usuario_id` en suscripciones, archivos y cambios. Cada petición lleva su usuario en `env.U` (nunca una variable global) y las notas se filtran con `VISIBLE` (dueño o responsable). Etiquetas y personas son comunes.
 **Cambios de esquema**: solo añadir columnas o tablas, nunca borrar. Para columnas nuevas usa `ALTER TABLE ... ADD COLUMN` protegido (comprobar con `PRAGMA table_info`), porque la base de producción ya tiene datos.
 
 ### App (`app/app.js`)
@@ -68,6 +69,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.5.1** (6 nov 2026): al abrir una nota nueva, el cursor queda en el título → `docs/PENDIENTE.md`.
 - **1.5.2** (18 nov 2026): fecha vencida como «12 nov» y descripción con prioridad en tablet (Lista y Matriz) → `docs/PENDIENTE.md`. Descripción y arquitectura para la versión multiusuario en `docs/ARQUITECTURA.md`.
 - **1.5.3** (18 nov 2026): fechas «26/11 17:30», etiquetas y fecha más estrechas en Lista y Matriz, iconos junto al título → `docs/PENDIENTE.md`.
+- **1.7.1 multiusuario** (18 nov 2026, en producción): fases 0 a 3 (entorno dev, usuarios y token, permiso de dictado, notas compartidas, registro, barra lateral con usuarios, traspaso de persona a usuario) → `docs/PENDIENTE.md` y `docs/PASO-PRODUCCION.md`. Para volver atrás: etiqueta local `v1.5.3` y worker `79c96957-ff07-40f5-ad15-5d131b10aa1e`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas
@@ -88,4 +90,4 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 Si encuentras un worker o repositorio `notas-obra` creado antes a mano, pregunta antes de sobrescribirlo.
 
 ### Actualizaciones
-`npm test` → sube `VERSION` y `CACHE` si cambia `app/` → commit → (confirmación) `git push` (publica la app) y `npx wrangler deploy` si cambió el worker. El worker se gestiona solo desde aquí: si se edita en el panel de Cloudflare, el siguiente deploy lo sobrescribe.
+`npm test` → sube `VERSION` y `CACHE` si cambia `app/` → probar en `--env dev` → commit → (confirmación) `git push` (publica la app) y `npx wrangler deploy --env ""` si cambió el worker (`--env ""` es producción; para desarrollo, `--env dev`). Antes de un cambio de esquema en producción, copia de seguridad con `npx wrangler d1 export notas-obra-db --remote --output ../copias-seguridad/FECHA/notas-obra-db.sql`. El worker se gestiona solo desde aquí: si se edita en el panel de Cloudflare, el siguiente deploy lo sobrescribe.
