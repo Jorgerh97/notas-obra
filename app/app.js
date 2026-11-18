@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -131,11 +131,28 @@ const per = id => S.personas.find(p => p.id === id);
 const nota = id => S.notas.find(n => n.id === id);
 const activas = () => S.notas.filter(n => n.estado === 'activa');
 
+// ---------- Notas compartidas (fase 3) ----------
+// Responsables de una nota: [{ tipo: 'usuario' | 'persona', id }]. Un worker sin usuarios solo envía persona_id.
+const respDe = n => Array.isArray(n.responsables) ? n.responsables : (n.persona_id ? [{ tipo: 'persona', id: n.persona_id }] : []);
+const personasDe = n => respDe(n).filter(r => r.tipo === 'persona').map(r => r.id);
+const yoId = () => (S.usuario ? S.usuario.id : null);
+const usu = id => (S.usuarios || []).find(u => u.id === id) || (S.reg && S.reg.datos && S.reg.datos.usuarios.find(u => u.id === id));
+const nombreUsu = id => id === yoId() ? 'tú' : ((usu(id) || {}).nombre || 'otro usuario');
+const nombreResp = r => r.tipo === 'usuario' ? nombreUsu(r.id) : ((per(r.id) || {}).nombre || '');
+const textoResp = n => respDe(n).map(nombreResp).filter(Boolean).join(', ');
+const esMia = n => !S.usuario || !n.usuario_id || n.usuario_id === S.usuario.id;
+const esCompartida = n => !esMia(n) || respDe(n).some(r => r.tipo === 'usuario' || (per(r.id) || {}).usuario_vinculado);
+// persona_id = primera persona de la lista, para un worker antiguo.
+const conResp = lista => ({ responsables: lista, persona_id: (lista.find(r => r.tipo === 'persona') || {}).id || null });
+// Borrar etiquetas o personas comunes: quien las creó o el administrador.
+const puedeBorrarComun = x => !S.usuario || S.usuario.admin || !x.creada_por || x.creada_por === S.usuario.id;
+const NO_ES_TUYA = 'Solo quien creó la nota puede enviarla a la papelera.';
+
 // Dictar gasta la cuenta de Anthropic y Workers AI del administrador: solo quien tenga permiso.
 const puedeDictar = () => !S.usuario || S.usuario.puede_dictar !== false;
 const SIN_DICTADO = 'Tu usuario no puede dictar. Escribe la nota con «Nueva nota».';
 async function guardarLocal() {
-  await idb.set('datos', { notas: S.notas, etiquetas: S.etiquetas, personas: S.personas, vistas: S.vistas, srv: S.srv, usuario: S.usuario });
+  await idb.set('datos', { notas: S.notas, etiquetas: S.etiquetas, personas: S.personas, vistas: S.vistas, srv: S.srv, usuario: S.usuario, usuarios: S.usuarios });
 }
 const guardarOutbox = () => idb.set('outbox', { outbox: S.outbox, conflictos: S.conflictos });
 const guardarCfg = () => idb.set('config', S.cfg);
@@ -239,6 +256,10 @@ async function flush() {
 }
 
 function aplicarRespuesta(op, d) {
+  if (d && d.nota && d.nota.sin_acceso) {   // se ha quitado a sí mismo de responsable: ya no la ve
+    S.notas = S.notas.filter(n => n.id !== d.nota.id);
+    return;
+  }
   if (d && d.nota) {
     const srv = d.nota;
     srv.fotos = conFotosPendientes(srv.id, srv.fotos);
@@ -281,6 +302,7 @@ async function sincronizar() {
     if (S.outbox.length) return;   // hubo cambios mientras llegaban los datos
     S.notas = d.notas; S.etiquetas = d.etiquetas; S.personas = d.personas; S.vistas = d.vistas; S.srv = d.config || {};
     S.usuario = d.usuario || null;   // fase 4: de quién son los datos y qué puede hacer
+    S.usuarios = d.usuarios || [];   // fase 3: usuarios de la app, para elegir responsables
     S.workerAntiguo = !(d.api >= API_MIN);
     for (const n of S.notas) n.fotos = conFotosPendientes(n.id, n.fotos || []);   // las que aún no han subido
     if (S.ui.vista && !S.vistas.some(v => v.id === S.ui.vista)) { S.ui.vista = null; S.ui.filtro = filtroVacio(); }
@@ -299,6 +321,7 @@ function crearNotaLocal(campos) {
   const n = {
     id: campos.id || uid(), titulo: campos.titulo, cuerpo: campos.cuerpo || '', prioridad: campos.prioridad || 'normal', estado: 'activa',
     persona_id: campos.persona_id || null, fecha_limite: campos.fecha_limite || null, hora_limite: campos.hora_limite || null,
+    responsables: campos.responsables || (campos.persona_id ? [{ tipo: 'persona', id: campos.persona_id }] : []), usuario_id: yoId(),
     aviso_cant: campos.aviso_cant || null, aviso_unidad: campos.aviso_unidad || null, alarma: proximoAviso(campos),
     subir_critica: campos.subir_critica === false || campos.subir_critica === 0 ? 0 : 1, duracion: campos.duracion || null, origen: campos.origen || 'manual',
     creada: t, actualizada: t, version: 1, etiquetas: campos.etiquetas || [], checklist: campos.checklist || [], alarma_enviada: 0,
@@ -318,9 +341,9 @@ function editarNotaLocal(id, cambios) {
   Object.assign(n, cambios, { actualizada: t });
   if (CAMPOS_AVISO.some(k => k in cambios)) { n.alarma = proximoAviso(n); n.alarma_enviada = 0; }
   if ('estado' in cambios) {
-    if (cambios.estado === 'realizada') { n.realizada_en = t; n.borrar_en = new Date(Date.now() + 365 * DIA).toISOString(); }
+    if (cambios.estado === 'realizada') { n.realizada_en = t; n.realizada_por = yoId(); n.borrar_en = new Date(Date.now() + 365 * DIA).toISOString(); }
     if (cambios.estado === 'papelera') { n.eliminada_en = t; n.borrar_en = new Date(Date.now() + 30 * DIA).toISOString(); }
-    if (cambios.estado === 'activa') { n.realizada_en = null; n.eliminada_en = null; n.borrar_en = null; }
+    if (cambios.estado === 'activa') { n.realizada_en = null; n.realizada_por = null; n.eliminada_en = null; n.borrar_en = null; }
   }
   encolar({ kind: 'nota', ref: id, method: 'PUT', path: '/notas/' + id, body: { ...cambios, base_version: n.version } });
   guardarLocal();
@@ -353,8 +376,8 @@ function cumpleFiltro(n, f) {
   }
   if (f.prioridades && f.prioridades.length && !f.prioridades.includes(n.prioridad)) return false;
   if (f.personas && f.personas.length) {
-    const p = n.persona_id || 'ninguna';
-    if (!f.personas.includes(p)) return false;
+    const ps = personasDe(n);
+    if (!(ps.length ? ps.some(x => f.personas.includes(x)) : f.personas.includes('ninguna'))) return false;
   }
   if (f.conAlarma && !(n.alarma || n.hora_limite || n.aviso_unidad)) return false;
   if (f.venceSemana) { const fe = fechaEfectiva(n); if (!fe || fe > finSemana()) return false; }
@@ -364,7 +387,7 @@ function cumpleFiltro(n, f) {
 function cumpleBusqueda(n, q) {
   if (!q) return true;
   const t = norm(q);
-  const texto = norm([n.titulo, n.cuerpo, (n.etiquetas || []).map(id => (etq(id) || {}).nombre).join(' '), (per(n.persona_id) || {}).nombre].join(' '));
+  const texto = norm([n.titulo, n.cuerpo, (n.etiquetas || []).map(id => (etq(id) || {}).nombre).join(' '), textoResp(n)].join(' '));
   return t.split(/\s+/).every(p => texto.includes(p.replace(/^#/, '')));
 }
 const filtroActivo = f => !!(f.etiquetas.length || f.prioridades.length || f.personas.length || f.conAlarma || f.venceSemana || f.estancadas);
@@ -634,12 +657,14 @@ function proximaRepeticion(n) {
   const serie = n.serie || n.id;
   return {
     id: serie + '_' + f, serie, repetir: n.repetir, titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prio_antes || n.prioridad,
-    persona_id: n.persona_id || null, fecha_limite: f, hora_limite: n.hora_limite || null, aviso_unidad: n.aviso_unidad || null, aviso_cant: n.aviso_cant || null,
+    persona_id: n.persona_id || null, responsables: respDe(n).map(r => ({ ...r })), fecha_limite: f, hora_limite: n.hora_limite || null, aviso_unidad: n.aviso_unidad || null, aviso_cant: n.aviso_cant || null,
     duracion: n.duracion || null, subir_critica: n.subir_critica, checklist: (n.checklist || []).map(p => ({ t: p.t, hecho: false })),
     etiquetas: [...(n.etiquetas || [])], origen: 'app',
   };
 }
 function aPapelera(id) {
+  const n = nota(id);
+  if (n && !esMia(n)) { toast(NO_ES_TUYA); return; }
   editarNotaLocal(id, { estado: 'papelera' });
   renderBase();
   toast('Nota enviada a la papelera', {
@@ -671,14 +696,16 @@ function textoCuando(n) {
 }
 function filaNota(n) {
   const tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
-  const p = per(n.persona_id), w = textoCuando(n);
+  const w = textoCuando(n), quien = textoResp(n), comp = esCompartida(n);
+  const who = (comp ? '👥 ' : '') + quien + (!esMia(n) ? (quien ? ' · ' : '') + 'de ' + nombreUsu(n.usuario_id) : '');
+  if (n.estado === 'realizada' && n.realizada_por && comp) w.extra = (w.extra ? w.extra + ' ' : '') + `<span class="hecha-por">✓ ${esc(nombreUsu(n.realizada_por))}</span>`;
   return `<article class="nota p-${n.prioridad}" data-id="${esc(n.id)}" data-drag="lista" data-titulo="${esc(n.titulo)}" data-cuando="${esc(cuandoCorto(n).t)}">
     <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
     <button class="n-main" data-act="abrir" data-id="${esc(n.id)}">
       <span class="n-prio"><i class="dot"></i>${PRIO_N[n.prioridad]}</span>
       <span class="n-tit"><i class="dot"></i><span>${esc(n.titulo)}${w.extra ? `<span class="n-extra-tit">${w.extra}</span>` : ''}${n.cuerpo ? `<span class="n-inline-body">${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</span></span>
       ${n.cuerpo ? `<span class="n-body">${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}
-      <span class="n-meta"><span class="n-tags">${tags}</span><span class="n-who">${p ? esc(p.nombre) : ''}</span><span class="n-when">${w.fecha}</span>${w.extra ? `<span class="n-extra">${w.extra}</span>` : ''}</span>
+      <span class="n-meta"><span class="n-tags">${tags}</span><span class="n-who" ${comp ? 'title="Nota compartida"' : ''}>${esc(who)}</span><span class="n-when">${w.fecha}</span>${w.extra ? `<span class="n-extra">${w.extra}</span>` : ''}</span>
     </button>
   </article>`;
 }
@@ -753,6 +780,7 @@ function renderBase() {
         <a class="side-item" href="#/resumen"><span class="grow"><b>Resumen del día</b></span></a>
         <a class="side-item" href="#/revision"><span class="grow"><b>Revisión semanal</b></span></a>
         <a class="side-item" href="#/historial"><span class="grow"><b>Historial y papelera</b></span></a>
+        ${S.usuario ? '<a class="side-item" href="#/registro"><span class="grow"><b>Tareas hechas compartidas</b></span></a>' : ''}
         <a class="side-item" href="#/ajustes"><span class="grow"><b>Ajustes</b></span></a>
       </div>
     </nav>
@@ -1143,7 +1171,7 @@ const SOLTAR = {
   // Cualquier nota soltada sobre un responsable de la barra lateral se le asigna.
   per: (st, d) => {
     const n = nota(st.id), p = per(d.dataset.per);
-    if (!n || !p || n.persona_id === p.id) return null;
+    if (!n || !p || personasDe(n).includes(p.id)) return null;
     return { texto: `Al soltar: «${n.titulo}» se asigna a ${p.nombre}`, hacer: () => asignarNota(n.id, p.id) };
   },
   // Ordenar los grupos de la barra lateral: se coloca encima o debajo según la mitad donde se suelte.
@@ -1160,10 +1188,10 @@ const SOLTAR = {
 };
 function asignarNota(id, personaId) {
   const n = nota(id); if (!n) return;
-  const antes = n.persona_id || null;
-  editarNotaLocal(id, { persona_id: personaId });
+  const antes = respDe(n).map(r => ({ ...r }));
+  editarNotaLocal(id, conResp([...antes, { tipo: 'persona', id: personaId }]));
   renderBase();
-  toast(`«${n.titulo}» asignada a ${(per(personaId) || {}).nombre}`, { deshacer: () => { editarNotaLocal(id, { persona_id: antes }); renderBase(); } });
+  toast(`«${n.titulo}» asignada a ${(per(personaId) || {}).nombre}`, { deshacer: () => { editarNotaLocal(id, conResp(antes)); renderBase(); } });
 }
 function ordenarGrupos(ids) {
   S.vistas.sort((a, b) => ids.indexOf(a.id) - ids.indexOf(b.id));
@@ -1308,7 +1336,7 @@ function sideResponsables() {
   const act = responsableActivo();
   const lista = [...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
   const items = lista.map(p => `<button class="side-item side-per" data-act="responsable" data-id="${esc(p.id)}" data-drop="per" data-per="${esc(p.id)}" aria-current="${act === p.id}">
-      <span class="avatar" aria-hidden="true">${esc(iniciales(p.nombre))}</span><span class="grow"><b>${esc(p.nombre)}</b>${p.cargo ? `<small>${esc(p.cargo)}</small>` : ''}</span><span class="n">${activas().filter(n => n.persona_id === p.id).length}</span></button>`).join('');
+      <span class="avatar" aria-hidden="true">${esc(iniciales(p.nombre))}</span><span class="grow"><b>${esc(p.nombre)}</b>${p.cargo ? `<small>${esc(p.cargo)}</small>` : ''}</span><span class="n">${activas().filter(n => personasDe(n).includes(p.id)).length}</span></button>`).join('');
   return `<div class="side-head"><span>Responsables</span><button class="btn small" data-act="per-nueva" title="Añadir un responsable">+ Añadir</button></div>
     ${items || '<p class="hint" style="padding:4px 12px">Añade a quién sueles asignar notas para ver aquí las de cada uno.</p>'}
     ${lista.length ? '<p class="hint side-pista">Arrastra una nota encima de un nombre para asignársela.</p>' : ''}`;
@@ -1388,6 +1416,7 @@ function pintarOverlay() {
   if (a === 'ajustes') { ov.innerHTML = vistaAjustes(); cargarDispositivos(); return; }
   if (a === 'revision') { if (!S.rev) iniciarRevision(); ov.innerHTML = vistaRevision(); return; }
   if (a === 'resumen') { ov.innerHTML = vistaResumen(); return; }
+  if (a === 'registro') { ov.innerHTML = vistaRegistro(); return; }
   if (a === 'conflicto') { ov.innerHTML = vistaConflicto(); return; }
   ov.innerHTML = '';
 }
@@ -1401,13 +1430,30 @@ function renderModal() {
 }
 
 // ---------- Editor de notas ----------
+// Botones de responsables del editor: usuarios de la app (menos el dueño) y personas sin cuenta.
+function pickResponsables(lista, dueno) {
+  const tiene = (t, id) => lista.some(r => r.tipo === t && r.id === id);
+  const usuarios = (S.usuarios || []).filter(u => u.id !== dueno).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const personas = [...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  return `<button type="button" data-act="ed-per" data-v="" aria-pressed="${!lista.length}">Nadie</button>`
+    + usuarios.map(u => `<button type="button" data-act="ed-per" data-t="usuario" data-v="${esc(u.id)}" aria-pressed="${tiene('usuario', u.id)}" aria-label="${esc(u.id === yoId() ? 'Yo' : u.nombre)}, usuario de la app">👤 ${esc(u.id === yoId() ? 'Yo' : u.nombre)}</button>`).join('')
+    + personas.map(p => `<button type="button" data-act="ed-per" data-t="persona" data-v="${esc(p.id)}" aria-pressed="${tiene('persona', p.id)}" title="${esc(p.cargo || '')}">${p.usuario_vinculado ? '👤 ' : ''}${esc(p.nombre)}</button>`).join('');
+}
+// Quién creó la nota y quién la dio por hecha (solo en notas compartidas).
+function infoCompartida(n) {
+  if (!n || !esCompartida(n)) return '';
+  const partes = [];
+  if (n.usuario_id) partes.push('Creada por ' + esc(nombreUsu(n.usuario_id)));
+  if (n.estado === 'realizada' && n.realizada_por) partes.push('Hecha por ' + esc(nombreUsu(n.realizada_por)) + (n.realizada_en ? ' · ' + esc(fechaCorta(n.realizada_en)) + ' ' + esc(hora(n.realizada_en)) : ''));
+  return `<p class="hint compartida-info">👥 Nota compartida · ${partes.join(' · ')}</p>`;
+}
 function iniciarEditor(id) {
   const n = id && id !== 'nueva' ? nota(id) : null;
   S.ed = {
     ruta: ruta(), id: n ? n.id : null,
-    d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, persona_id: n.persona_id || '', fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
+    d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, responsables: respDe(n).map(r => ({ ...r })), fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
         aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', persona_id: S.ui.filtro.personas.length === 1 && per(S.ui.filtro.personas[0]) ? S.ui.filtro.personas[0] : '', fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
+      : { titulo: '', cuerpo: '', prioridad: 'normal', responsables: S.ui.filtro.personas.length === 1 && per(S.ui.filtro.personas[0]) ? [{ tipo: 'persona', id: S.ui.filtro.personas[0] }] : [], fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
         aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
     sug: null, sel: 0, enfocar: !n,
@@ -1441,8 +1487,10 @@ function vistaEditor() {
     <div class="field"><span class="field-label">Prioridad</span>
       <div class="prio-pick">${PRIOS.map(p => `<button class="p-${p}" data-act="ed-prio" data-v="${p}" aria-pressed="${d.prioridad === p}">${PRIO_N[p]}</button>`).join('')}</div>
     </div>
-    <div class="field"><span class="field-label">Responsable <small>(opcional)</small></span>
-      <div class="per-pick"><button type="button" data-act="ed-per" data-v="" aria-pressed="${!d.persona_id}">Nadie</button>${[...S.personas].sort((a, b) => a.nombre.localeCompare(b.nombre, 'es')).map(p => `<button type="button" data-act="ed-per" data-v="${esc(p.id)}" aria-pressed="${d.persona_id === p.id}" title="${esc(p.cargo || '')}">${esc(p.nombre)}</button>`).join('')}<button type="button" class="nuevo" data-act="per-nueva">+ Nuevo</button></div>
+    ${infoCompartida(e.id ? nota(e.id) : null)}
+    <div class="field"><span class="field-label">Responsables <small>(opcional; puedes elegir varios)</small></span>
+      <div class="per-pick">${pickResponsables(d.responsables, e.id ? (nota(e.id) || {}).usuario_id : yoId())}<button type="button" class="nuevo" data-act="per-nueva">+ Nuevo</button></div>
+      ${(S.usuarios || []).length > 1 ? '<small class="hint">👤 Usuario de la app: verá la nota y recibirá sus avisos.</small>' : ''}
     </div>
     <div class="grid2">
       <label class="field"><span>Fecha límite</span><input class="input" type="date" data-ed="fecha_limite" value="${esc(d.fecha_limite)}"></label>
@@ -1463,7 +1511,7 @@ function vistaEditor() {
     ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
     ${n && n.estado !== 'activa' ? `<div class="banner"><span class="grow">Esta nota está ${n.estado === 'realizada' ? 'realizada' : 'en la papelera'}.</span><button class="btn small" data-act="ed-reabrir">Volver a pendiente</button></div>` : ''}`;
   const pie = n && n.estado === 'activa'
-    ? `<button class="btn danger" data-act="ed-borrar">Eliminar</button><button class="btn" data-act="ed-hecha">Realizada</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`
+    ? `${esMia(nota(e.id) || {}) ? '<button class="btn danger" data-act="ed-borrar">Eliminar</button>' : ''}<button class="btn" data-act="ed-hecha">Realizada</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`
     : `<button class="btn" data-act="cerrar">Cancelar</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`;
   return pagina(e.id ? 'Editar nota' : 'Nueva nota', cuerpo, pie);
 }
@@ -1540,8 +1588,9 @@ function pintarChecklist(foco) {
 
 function guardarCambiosSilencio() {
   const e = S.ed, d = e.d, n = nota(e.id); if (!n || !d.titulo.trim()) return;
-  const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null, ...camposFecha(d), duracion: duracionGuardar(d, n), subir_critica: d.subir_critica ? 1 : 0 };
+  const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, ...camposFecha(d), duracion: duracionGuardar(d, n), subir_critica: d.subir_critica ? 1 : 0 };
   const cambios = {};
+  if (JSON.stringify(respDe(n)) !== JSON.stringify(d.responsables)) Object.assign(cambios, conResp(d.responsables));
   for (const k of Object.keys(campos)) if ((n[k] == null ? null : n[k]) !== campos[k] && !(k === 'cuerpo' && (n[k] || '') === campos[k])) cambios[k] = campos[k];
   if (JSON.stringify([...(n.etiquetas || [])].sort()) !== JSON.stringify([...d.etiquetas].sort())) cambios.etiquetas = d.etiquetas;
   const chk = checklistGuardar(d);
@@ -1554,15 +1603,15 @@ function guardarEditor() {
   const titulo = d.titulo.trim();
   if (!titulo) { toast('Escribe un título para la nota.'); $('[data-ed="titulo"]') && $('[data-ed="titulo"]').focus(); return; }
   const campos = {
-    titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, persona_id: d.persona_id || null,
+    titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, ...conResp(d.responsables),
     ...camposFecha(d), duracion: duracionGuardar(d, e.id ? nota(e.id) : null), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
     checklist: checklistGuardar(d),
   };
   if (e.id) {
     const n = nota(e.id), cambios = {};
     for (const k of Object.keys(campos)) {
-      const antes = k === 'etiquetas' ? JSON.stringify([...(n.etiquetas || [])].sort()) : k === 'checklist' ? JSON.stringify(n.checklist || []) : n[k] == null ? null : n[k];
-      const ahora = k === 'etiquetas' ? JSON.stringify([...campos[k]].sort()) : k === 'checklist' ? JSON.stringify(campos[k]) : campos[k];
+      const antes = k === 'etiquetas' ? JSON.stringify([...(n.etiquetas || [])].sort()) : k === 'checklist' ? JSON.stringify(n.checklist || []) : k === 'responsables' ? JSON.stringify(respDe(n)) : n[k] == null ? null : n[k];
+      const ahora = k === 'etiquetas' ? JSON.stringify([...campos[k]].sort()) : ['checklist', 'responsables'].includes(k) ? JSON.stringify(campos[k]) : campos[k];
       if (antes !== ahora && !(k === 'cuerpo' && (antes || '') === ahora)) cambios[k] = campos[k];
     }
     if (Object.keys(cambios).length) editarNotaLocal(e.id, cambios);
@@ -1673,7 +1722,7 @@ function vistaResumen() {
       <div class="res-n"><b>${quietas.length}</b><span>Sin tocar</span></div>
     </div>
     ${seccion('Hoy con hora', conHora, n => fila(n, n.hora_limite, 'azul', obra(n) && '#' + obra(n)))}
-    ${seccion('Urgentes', urgentes, n => fila(n, !n.fecha_limite ? '—' : n.fecha_limite === hoy ? 'Hoy' : n.fecha_limite < hoy ? 'Venció' : mayus(diaCorto(n.fecha_limite).split(',')[0]), 'rojo', [obra(n) && '#' + obra(n), (per(n.persona_id) || {}).nombre].filter(Boolean).join(' · ')))}
+    ${seccion('Urgentes', urgentes, n => fila(n, !n.fecha_limite ? '—' : n.fecha_limite === hoy ? 'Hoy' : n.fecha_limite < hoy ? 'Venció' : mayus(diaCorto(n.fecha_limite).split(',')[0]), 'rojo', [obra(n) && '#' + obra(n), textoResp(n)].filter(Boolean).join(' · ')))}
     ${seccion('Plazos de hoy', plazos, n => fila(n, '⚑', 'azul', [PRIO_N[n.prioridad], obra(n) && '#' + obra(n)].filter(Boolean).join(' · ')))}
     ${seccion('Sin tocar desde hace días', quietas, n => fila(n, dias(n) + ' d', 'gris', obra(n) && '#' + obra(n)))}
     ${!conHora.length && !urgentes.length && !plazos.length && !quietas.length ? '<div class="empty"><h2>Todo en orden</h2><p>Hoy no hay nada urgente ni pendiente con hora.</p></div>' : ''}`;
@@ -1685,6 +1734,7 @@ function vistaMenu() {
     <div><a class="btn link" href="#/resumen" data-reemplazar>Resumen del día</a></div>
     <div><a class="btn link" href="#/revision" data-reemplazar>Revisión semanal</a></div>
     <div><a class="btn link" href="#/historial" data-reemplazar>Historial y papelera</a></div>
+    ${S.usuario ? '<div><a class="btn link" href="#/registro" data-reemplazar>Tareas hechas compartidas</a></div>' : ''}
     <div><a class="btn link" href="#/importar" data-reemplazar>Importar notas desde CSV</a></div>
     <div><a class="btn link" href="#/ajustes" data-reemplazar>Ajustes</a></div>
     <div><button class="btn link" data-act="pdf-reunion">PDF para reunión</button></div>
@@ -1696,8 +1746,8 @@ function vistaMenu() {
 // ---------- Impresión / PDF ----------
 function imprimir(titulo, notas) {
   const filas = notas.map(n => `<tr><td>${PRIO_N[n.prioridad]}</td><td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}${(n.checklist || []).map(p => '<br>' + (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('')}</td>
-    <td>${(n.etiquetas || []).map(id => '#' + esc((etq(id) || {}).nombre || '')).join(' ')}</td><td>${esc((per(n.persona_id) || {}).nombre || '')}</td>
-    <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : '')) : ''}${textoAviso(n) ? '<br>Aviso ' + esc(textoAviso(n)) : ''}${n.repetir ? '<br>↻ ' + esc(textoRepetir(n.repetir)) : ''}</td></tr>`).join('');
+    <td>${(n.etiquetas || []).map(id => '#' + esc((etq(id) || {}).nombre || '')).join(' ')}</td><td>${esc(textoResp(n))}</td>
+    <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) + (n.realizada_por && esCompartida(n) ? ' por ' + esc(nombreUsu(n.realizada_por)) : '') : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : '')) : ''}${textoAviso(n) ? '<br>Aviso ' + esc(textoAviso(n)) : ''}${n.repetir ? '<br>↻ ' + esc(textoRepetir(n.repetir)) : ''}</td></tr>`).join('');
   $('#print').innerHTML = `<h1>${esc(titulo)}</h1><p>${notas.length} notas · ${esc(new Date().toLocaleString('es-ES'))}</p>
     <table><thead><tr><th>Prioridad</th><th>Nota</th><th>Etiquetas</th><th>Asignada a</th><th>Estado y fechas</th></tr></thead><tbody>${filas}</tbody></table>`;
   setTimeout(() => window.print(), 50);
@@ -1720,7 +1770,7 @@ function imprimirReunion(titulo, notas) {
         ${n.cuerpo ? `<div>${esc(n.cuerpo).replace(/\n/g, '<br>')}</div>` : ''}
         ${(n.checklist || []).length ? `<div class="pr-chk">${n.checklist.map(p => (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('<br>')}</div>` : ''}
         ${otras || (n.fotos || []).length ? `<div class="pr-gris">${otras}${(n.fotos || []).length ? ` 📷 ${n.fotos.length}` : ''}</div>` : ''}</td>
-      <td>${esc((per(n.persona_id) || {}).nombre || '')}</td>
+      <td>${esc(textoResp(n))}</td>
       <td>${n.fecha_limite ? `<span class="${late ? 'pr-late' : ''}">${late ? 'Venció ' : ''}${esc(diaCorto(n.fecha_limite).replace(',', ''))}${n.hora_limite ? ' ' + n.hora_limite : ''}</span>` : '—'}</td>
       <td></td></tr>`;
   };
@@ -2159,6 +2209,68 @@ async function limpiarAudios() {
 }
 
 // ---------- Historial ----------
+// ---------- Registro de tareas hechas compartidas (fase 3) ----------
+// Se pide al worker al abrirlo (necesita conexión): cada uno ve aquellas en las que participa; el administrador, todas.
+async function cargarRegistro() {
+  S.reg = { ...(S.reg || {}), cargando: true, f: (S.reg && S.reg.f) || { usuario: '', obra: '', desde: '', hasta: '' } };
+  try { S.reg.datos = await api('/registro'); S.reg.error = ''; }
+  catch (e) { S.reg.error = e.message || 'No se ha podido cargar el registro.'; }
+  S.reg.cargando = false;
+  if (ruta() === 'registro') renderOverlay();
+}
+function filasRegistro() {
+  const R = S.reg, f = R.f;
+  return R.datos.notas.filter(n => {
+    const d = (n.realizada_en || '').slice(0, 10);
+    if (f.desde && d < f.desde) return false;
+    if (f.hasta && d > f.hasta) return false;
+    if (f.obra && !(n.etiquetas || []).includes(f.obra)) return false;
+    if (f.usuario && !(n.usuario_id === f.usuario || n.realizada_por === f.usuario || respDe(n).some(r => (r.tipo === 'usuario' && r.id === f.usuario) || (per(r.id) || {}).usuario_vinculado === f.usuario))) return false;
+    return true;
+  });
+}
+const nombreReg = id => ((S.reg.datos.usuarios || []).find(u => u.id === id) || {}).nombre || '—';
+const columnasRegistro = n => [
+  n.realizada_en ? fechaCorta(n.realizada_en) + ' ' + hora(n.realizada_en) : '',
+  n.titulo, (n.etiquetas || []).map(id => '#' + ((etq(id) || {}).nombre || '')).join(' '),
+  nombreReg(n.usuario_id), respDe(n).map(r => r.tipo === 'usuario' ? nombreReg(r.id) : ((per(r.id) || {}).nombre || '')).filter(Boolean).join(', '),
+  n.realizada_por ? nombreReg(n.realizada_por) : '—',
+];
+const CABECERA_REGISTRO = ['Hecha el', 'Nota', 'Etiquetas', 'Creada por', 'Responsables', 'OK de'];
+function vistaRegistro() {
+  if (!S.reg || (!S.reg.datos && !S.reg.cargando && !S.reg.error)) { cargarRegistro(); }
+  const R = S.reg;
+  if (!R.datos) return pagina('Tareas hechas compartidas', `<p class="hint">${R.error ? esc(R.error) : 'Cargando…'}</p>`,
+    R.error ? '<button class="btn primary" data-act="reg-recargar">Reintentar</button>' : '');
+  const f = R.f, filas = filasRegistro();
+  const obras = S.etiquetas.filter(e => e.tipo === 'obra').sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  const filtros = `<div class="reg-filtros">
+    <label class="field"><small>Usuario</small><select class="input" data-reg="usuario"><option value="">Todos</option>${(R.datos.usuarios || []).map(u => `<option value="${esc(u.id)}" ${f.usuario === u.id ? 'selected' : ''}>${esc(u.nombre)}</option>`).join('')}</select></label>
+    <label class="field"><small>Obra</small><select class="input" data-reg="obra"><option value="">Todas</option>${obras.map(e => `<option value="${esc(e.id)}" ${f.obra === e.id ? 'selected' : ''}>#${esc(e.nombre)}</option>`).join('')}</select></label>
+    <label class="field"><small>Desde</small><input class="input" type="date" data-reg="desde" value="${esc(f.desde)}"></label>
+    <label class="field"><small>Hasta</small><input class="input" type="date" data-reg="hasta" value="${esc(f.hasta)}"></label>
+  </div>`;
+  const tabla = filas.length ? `<div class="reg-tabla"><table><thead><tr>${CABECERA_REGISTRO.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>
+    ${filas.map(n => { const c = columnasRegistro(n); return `<tr><td class="reg-fecha">${esc(c[0])}</td><td><button class="btn link" data-act="abrir" data-id="${esc(n.id)}">${esc(c[1])}</button></td><td class="reg-tags">${esc(c[2])}</td><td>${esc(c[3])}</td><td>${esc(c[4])}</td><td><b>${esc(c[5])}</b></td></tr>`; }).join('')}
+  </tbody></table></div>` : '<p class="hint">No hay tareas hechas compartidas con estos filtros.</p>';
+  const cuerpo = `<p class="hint">${R.datos.todos ? 'Como administrador ves las de todos los usuarios.' : 'Notas compartidas en las que participas, ya hechas.'} ${filas.length} ${filas.length === 1 ? 'tarea' : 'tareas'}.</p>${filtros}${tabla}`;
+  return pagina('Tareas hechas compartidas', cuerpo, `<button class="btn" data-act="reg-csv">Exportar CSV</button><button class="btn primary" data-act="reg-pdf">PDF</button>`);
+}
+function registroCsv() {
+  const celda = v => /[";\n]/.test(v) ? '"' + String(v).replace(/"/g, '""') + '"' : String(v);
+  const txt = '\ufeff' + [CABECERA_REGISTRO, ...filasRegistro().map(columnasRegistro)].map(r => r.map(celda).join(';')).join('\r\n') + '\r\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'tareas-hechas-' + hoyYmd() + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function registroPdf() {
+  const filas = filasRegistro();
+  imprimirHtml(`<div class="pr"><div class="pr-cab"><div><h1>Tareas hechas compartidas</h1><div class="pr-gris">${filas.length} tareas · ${esc(new Date().toLocaleDateString('es-ES'))}</div></div></div>
+    <table><thead><tr>${CABECERA_REGISTRO.map(c => `<th>${c}</th>`).join('')}</tr></thead><tbody>${filas.map(n => `<tr>${columnasRegistro(n).map(c => `<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`);
+}
+
 function vistaHistorial() {
   const tab = S.ui.histTab;
   const q = S.ui.histQ;
@@ -2167,7 +2279,7 @@ function vistaHistorial() {
   if (tab === 'realizadas') {
     const ns = S.notas.filter(n => n.estado === 'realizada' && cumpleBusqueda(n, q)).sort((a, b) => String(b.realizada_en).localeCompare(String(a.realizada_en)));
     lista = ns.length ? `<div class="list-plain card">${ns.slice(0, 300).map(n => `<div><span class="grow"><b>${esc(n.titulo)}</b>
-      <small>Realizada el ${esc(fechaCorta(n.realizada_en))} · ${obraAbierta(n) ? 'se conserva mientras su obra esté abierta' : 'se borra el ' + esc(fechaCorta(n.borrar_en))}</small></span>
+      <small>Realizada el ${esc(fechaCorta(n.realizada_en))}${n.realizada_por && esCompartida(n) ? ' por ' + esc(nombreUsu(n.realizada_por)) : ''} · ${obraAbierta(n) ? 'se conserva mientras su obra esté abierta' : 'se borra el ' + esc(fechaCorta(n.borrar_en))}</small></span>
       <button class="btn small" data-act="reabrir" data-id="${esc(n.id)}">Reabrir</button></div>`).join('')}</div>` : '<p class="hint">No hay notas realizadas.</p>';
   } else if (tab === 'papelera') {
     const ns = S.notas.filter(n => n.estado === 'papelera' && cumpleBusqueda(n, q)).sort((a, b) => String(b.eliminada_en).localeCompare(String(a.eliminada_en)));
@@ -2218,7 +2330,7 @@ function vistaRevision() {
       <div class="row"><i class="dot"></i><b style="color:var(--p-ink)">${PRIO_N[n.prioridad]}</b><span class="grow"></span><span class="hint">${motivo}</span></div>
       <div class="big">${esc(n.titulo)}</div>
       ${n.cuerpo ? `<p style="margin:0;white-space:pre-wrap">${esc(n.cuerpo)}</p>` : ''}
-      <div class="hint">${tags}${per(n.persona_id) ? ' · ' + esc(per(n.persona_id).nombre) : ''}</div>
+      <div class="hint">${tags}${textoResp(n) ? ' · ' + esc(textoResp(n)) : ''}</div>
     </div>
     ${R.fecha ? `<div class="card"><label class="field"><span>Nueva fecha límite</span><input id="rev-fecha" class="input" type="date" value="${esc(addDias(hoyYmd(), 7))}"></label>
       <div class="row"><button class="btn" data-act="rev-fecha-no">Cancelar</button><button class="btn primary" data-act="rev-fecha-ok">Guardar fecha</button></div></div>` : `
@@ -2233,7 +2345,7 @@ function vistaRevision() {
 function accionRevision(v) {
   const R = S.rev, id = R.ids[R.i];
   if (v === 'hecha') { realizarNota(id); R.hechas++; }
-  if (v === 'eliminar') { editarNotaLocal(id, { estado: 'papelera' }); R.borradas++; }
+  if (v === 'eliminar') { if (!esMia(nota(id) || {})) { toast(NO_ES_TUYA); return; } editarNotaLocal(id, { estado: 'papelera' }); R.borradas++; }
   if (v === 'mantener') { editarNotaLocal(id, {}); R.mantenidas++; }
   if (v === 'reprogramar') { R.fecha = true; renderOverlay(); return; }
   R.i++;
@@ -2252,8 +2364,8 @@ function vistaConflicto() {
   const c = S.conflictos[0];
   if (!c) return pagina('Conflictos', '<p>No hay conflictos pendientes.</p>', `<button class="btn primary" data-act="cerrar">Cerrar</button>`);
   const mia = nota(c.op.ref) || {}, srv = c.servidor;
-  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['checklist', 'Checklist'], ['estado', 'Estado'], ['persona_id', 'Responsable']];
-  const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'aviso_unidad' ? (textoAviso(n) || '—') : k === 'checklist' ? ((n.checklist || []).map(p => (p.hecho ? '☑ ' : '☐ ') + p.t).join(' · ') || '—') : k === 'persona_id' ? ((per(n[k]) || {}).nombre || '—') : (n[k] || '—');
+  const campos = [['titulo', 'Título'], ['cuerpo', 'Nota'], ['prioridad', 'Prioridad'], ['fecha_limite', 'Fecha límite'], ['hora_limite', 'Hora'], ['aviso_unidad', 'Aviso previo'], ['checklist', 'Checklist'], ['estado', 'Estado'], ['responsables', 'Responsables']];
+  const val = (n, k) => k === 'prioridad' ? PRIO_N[n[k]] : k === 'aviso_unidad' ? (textoAviso(n) || '—') : k === 'checklist' ? ((n.checklist || []).map(p => (p.hecho ? '☑ ' : '☐ ') + p.t).join(' · ') || '—') : k === 'responsables' ? (textoResp(n) || '—') : (n[k] || '—');
   const col = (n, t) => `<div><b>${t}</b>${campos.map(([k, l]) => `<span class="${JSON.stringify(mia[k] || '') !== JSON.stringify(srv[k] || '') ? 'changed' : ''}"><small class="hint">${l}:</small> ${esc(val(n, k))}</span>`).join('')}</div>`;
   const cuerpo = `<p>Esta nota se cambió en otro dispositivo mientras la editabas aquí. Elige qué versión quieres conservar. Lo marcado en naranja es lo que difiere.</p>
     <div class="diff">${col(mia, 'Tu versión (este dispositivo)')}${col(srv, 'Versión guardada (otro dispositivo)')}</div>`;
@@ -2399,14 +2511,14 @@ function modalEtiqueta() {
     ${m.id && e.tipo === 'obra' ? `<div class="card" style="background:var(--bg)"><b>${e.cerrada ? 'Obra cerrada' : 'Obra abierta'}</b>
       <p class="hint" style="margin:0">${e.cerrada ? 'Sus notas realizadas se borran al cumplir un año.' : 'Mientras esté abierta, sus notas realizadas no se borran. Al cerrarla se guarda un informe con todas sus notas y se abre para descargarlo en PDF.'}</p>
       <div class="row"><button class="btn small" data-act="me-cerrar">${e.cerrada ? 'Reabrir obra' : 'Cerrar obra'}</button></div></div>` : ''}
-    ${m.id ? '<button class="btn danger" data-act="me-borrar">Eliminar etiqueta</button>' : ''}`;
+    ${m.id && puedeBorrarComun(etq(m.id) || {}) ? '<button class="btn danger" data-act="me-borrar">Eliminar etiqueta</button>' : ''}`;
   return pagina(m.id ? 'Editar etiqueta' : 'Nueva etiqueta', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="me-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
 }
 function modalPersona() {
   const m = S.modal, p = m.id ? per(m.id) : { nombre: '', cargo: '' };
   const cuerpo = `<label class="field"><span>Nombre</span><input class="input" id="mp-nombre" value="${esc(p.nombre)}" placeholder="Encargado, Jordi…"></label>
     <label class="field"><span>Cargo <small>(opcional)</small></span><input class="input" id="mp-cargo" value="${esc(p.cargo || '')}" placeholder="Jefe de producción"></label>
-    ${m.id ? '<button class="btn danger" data-act="mp-borrar">Eliminar responsable</button>' : ''}`;
+    ${m.id && puedeBorrarComun(per(m.id) || {}) ? '<button class="btn danger" data-act="mp-borrar">Eliminar responsable</button>' : ''}`;
   return pagina(m.id ? 'Editar responsable' : 'Nuevo responsable', cuerpo, `<button class="btn" data-act="modal-cerrar">Cancelar</button><button class="btn primary" data-act="mp-guardar">Guardar</button>`, { sheet: true }).replace('data-act="cerrar"', 'data-act="modal-cerrar"');
 }
 function modalGrupo() {
@@ -2538,7 +2650,16 @@ const ACT = {
 
   // Editor
   'ed-prio': (el) => { S.ed.d.prioridad = el.dataset.v; renderOverlay(); },
-  'ed-per': (el) => { S.ed.d.persona_id = el.dataset.v; renderOverlay(); },
+  'reg-recargar': () => { S.reg = null; renderOverlay(); },
+  'reg-csv': () => registroCsv(),
+  'reg-pdf': () => registroPdf(),
+  'ed-per': (el) => {
+    const d = S.ed.d, v = el.dataset.v, t = el.dataset.t || 'persona';
+    if (!v) d.responsables = [];
+    else if (d.responsables.some(r => r.tipo === t && r.id === v)) d.responsables = d.responsables.filter(r => !(r.tipo === t && r.id === v));
+    else d.responsables = [...d.responsables, { tipo: t, id: v }];
+    renderOverlay();
+  },
   'ed-dur': (el) => {
     if (el.dataset.v === 'otra') S.ed.durOtra = true;
     else { S.ed.durOtra = false; S.ed.d.duracion = Number(el.dataset.v); }
@@ -2707,7 +2828,7 @@ const ACT = {
     if (S.modal.id) { Object.assign(per(S.modal.id), { nombre, cargo }); encolar({ kind: 'persona', method: 'PUT', path: '/personas/' + S.modal.id, body: { nombre, cargo } }); }
     else {
       const p = { id: uid(), nombre, cargo }; S.personas.push(p); encolar({ kind: 'persona', method: 'POST', path: '/personas', body: p });
-      if (S.ed && ruta().startsWith('nota')) S.ed.d.persona_id = p.id;   // creado desde la nota: se le asigna
+      if (S.ed && ruta().startsWith('nota')) S.ed.d.responsables = [...S.ed.d.responsables, { tipo: 'persona', id: p.id }];   // creado desde la nota: se le asigna
     }
     guardarLocal(); S.modal = null; renderModal(); renderOverlay(); renderBase();
   },
@@ -2715,7 +2836,7 @@ const ACT = {
     const p = per(S.modal.id);
     if (!confirm('¿Eliminar a ' + p.nombre + '? Sus notas quedarán sin asignar.')) return;
     S.personas = S.personas.filter(x => x.id !== p.id);
-    for (const n of S.notas) if (n.persona_id === p.id) n.persona_id = null;
+    for (const n of S.notas) if (personasDe(n).includes(p.id)) Object.assign(n, conResp(respDe(n).filter(r => !(r.tipo === 'persona' && r.id === p.id))));
     encolar({ kind: 'persona', method: 'DELETE', path: '/personas/' + p.id });
     guardarLocal(); S.modal = null; renderModal(); renderOverlay(); renderBase();
   },
@@ -2815,6 +2936,7 @@ document.addEventListener('change', ev => {
   if (t.matches('[data-csv]')) { const f = t.files[0]; t.value = ''; importarCsv(f); return; }
   if (t.dataset.fotos) { const files = [...t.files]; t.value = ''; anadirFotos(t.dataset.fotos, files); return; }
   if (t.matches('[data-grupo-vista]')) { aplicarVista(t.value); return; }
+  if (t.dataset.reg && S.reg) { S.reg.f[t.dataset.reg] = t.value; renderOverlay(); return; }
   if (t.dataset.resumen) {
     if (t.dataset.resumen === 'activo') guardarResumen('activo', t.checked ? '1' : '0');
     else if (/^\d{2}:\d{2}$/.test(t.value)) guardarResumen('hora', t.value);
@@ -2884,6 +3006,7 @@ window.addEventListener('hashchange', () => {
   if (r !== 'revision') S.rev = null;
   if (r !== 'dictado' && S.dic && (S.dic.fase === 'grabando' || S.dic.fase === 'pausa')) cancelarGrabacion();
   if (r !== 'historial') S._archivos = null;
+  if (r !== 'registro') S.reg = null;   // se vuelve a pedir al abrirlo
   S.modal = null; renderModal();
   renderOverlay();
 });
@@ -2895,7 +3018,7 @@ async function arrancar() {
     if (Array.isArray(fp)) S.fotosPend = fp;
     if (cfg) Object.assign(S.cfg, cfg);
     if (!S.cfg.dispositivo) S.cfg.dispositivo = nombrePorDefecto();
-    if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; S.usuario = datos.usuario || null; }
+    if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; S.usuario = datos.usuario || null; S.usuarios = datos.usuarios || []; }
     if (ob) { S.outbox = (ob.outbox || []).map(o => ({ ...o, enviando: false })); S.conflictos = ob.conflictos || []; }
     if (audios) S.audios = audios;
     if (ui) { S.ui.modo = MODOS.some(m => m[0] === ui.modo) ? ui.modo : 'lista'; if (ui.cal) Object.assign(S.ui.cal, ui.cal, { ref: '' }); S.ui.agrupar = ui.agrupar || 'fecha'; S.ui.vista = ui.vista || null; S.ui.filtro = { ...filtroVacio(), ...(ui.filtro || {}) }; }

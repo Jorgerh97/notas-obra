@@ -26,6 +26,12 @@
 //   GET|POST /usuarios, PUT /usuarios/:id, POST /usuarios/:id/token   Solo el administrador: alta de usuarios,
 //                                     activar/desactivar, permiso de dictado y token nuevo (el token solo se devuelve al crearlo).
 //
+// Notas compartidas (fase 3): una nota tiene uno o varios responsables (tabla nota_responsables): usuarios de
+// la app o personas sin cuenta (una persona puede estar vinculada a un usuario). La ven su dueño (quien la creó,
+// notas.usuario_id) y los responsables con cuenta. Los responsables pueden hacer todo menos enviarla a la papelera
+// o borrarla. Etiquetas y personas son comunes a todos los usuarios. realizada_por guarda quién la dio por hecha.
+//   GET    /registro                  Tareas hechas compartidas (cada uno las suyas; el administrador, todas).
+//
 // Dictado (fase 2): /transcribir y /analizar gastan la cuenta de Anthropic y Workers AI de Jorge, así que solo
 // los puede usar quien tenga puede_dictar. El usuario principal lo tiene siempre; los demás empiezan sin él.
 //
@@ -149,6 +155,10 @@ const SCHEMA = [
      activo INTEGER DEFAULT 1, creado TEXT, actualizado TEXT)`,
   `CREATE TABLE IF NOT EXISTS config_usuario (usuario_id TEXT NOT NULL, clave TEXT NOT NULL, valor TEXT, PRIMARY KEY (usuario_id, clave))`,
   `CREATE INDEX IF NOT EXISTS idx_notas_usuario ON notas(usuario_id)`,
+  // Fase 3: responsables de cada nota (tipo 'usuario' o 'persona').
+  `CREATE TABLE IF NOT EXISTS nota_responsables (nota_id TEXT NOT NULL, tipo TEXT NOT NULL, ref_id TEXT NOT NULL, asignado_por TEXT, asignado_en TEXT,
+     PRIMARY KEY (nota_id, tipo, ref_id))`,
+  `CREATE INDEX IF NOT EXISTS idx_resp_ref ON nota_responsables(tipo, ref_id)`,
 ];
 // Columnas añadidas después de la primera versión (la base de producción ya tiene datos).
 const COLUMNAS_NUEVAS = [
@@ -157,6 +167,7 @@ const COLUMNAS_NUEVAS = [
   // Fase 4: dueño de cada dispositivo, informe y cambio. Lo que ya existe es de "yo".
   ['suscripciones', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['archivos', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['cambios', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"],
   ['usuarios', 'puede_dictar', 'INTEGER DEFAULT 0'],   // fase 2: el principal puede siempre (puedeDictar)
+  ['notas', 'realizada_por', 'TEXT'], ['personas', 'usuario_vinculado', 'TEXT'],   // fase 3
 ];
 let schemaOk = false;
 async function ensureSchema(env) {
@@ -173,6 +184,10 @@ async function ensureSchema(env) {
   await run(env, 'INSERT OR IGNORE INTO usuarios (id, nombre, admin, activo, creado) VALUES (?, ?, 1, 1, ?)', USUARIO_PRINCIPAL, 'Jorge', now());
   await run(env, `INSERT OR IGNORE INTO config_usuario (usuario_id, clave, valor) SELECT ?, clave, valor FROM config WHERE clave IN (${CONFIG_USUARIO.map(() => '?').join(',')})`,
     USUARIO_PRINCIPAL, ...CONFIG_USUARIO);
+  // Fase 3: el responsable único de antes (persona_id) pasa a la lista de responsables. INSERT OR IGNORE y
+  // persona_id siempre igual a la primera persona de la lista: repetirlo no cambia nada.
+  await run(env, `INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en)
+    SELECT id, 'persona', persona_id, usuario_id, creada FROM notas WHERE persona_id IS NOT NULL AND persona_id <> ''`);
   schemaOk = true;
 }
 
@@ -208,6 +223,102 @@ async function getCfgU(env, clave) {
 }
 const setCfgU = (env, clave, valor) => run(env, `INSERT INTO config_usuario (usuario_id, clave, valor) VALUES (?, ?, ?)
   ON CONFLICT(usuario_id, clave) DO UPDATE SET valor = excluded.valor`, env.U, clave, String(valor));
+
+// ---------- Notas visibles y responsables (fase 3) ----------
+// Notas que ve el usuario env.U: las suyas y, salvo en la papelera, aquellas de las que es responsable
+// (directamente o a través de una persona vinculada a él). Se usa con ...vis(env).
+const VISIBLE = `(notas.usuario_id = ? OR (notas.estado != 'papelera' AND EXISTS (SELECT 1 FROM nota_responsables r WHERE r.nota_id = notas.id
+  AND ((r.tipo = 'usuario' AND r.ref_id = ?) OR (r.tipo = 'persona' AND r.ref_id IN (SELECT id FROM personas WHERE usuario_vinculado = ?))))))`;
+const vis = env => [env.U, env.U, env.U];
+const RESP_MAX = 10;
+async function responsablesDe(env, ids) {
+  const mapa = {};
+  for (let i = 0; i < ids.length; i += 90) {
+    const trozo = ids.slice(i, i + 90);
+    const filas = await all(env, `SELECT nota_id, tipo, ref_id FROM nota_responsables WHERE nota_id IN (${trozo.map(() => '?').join(',')}) ORDER BY asignado_en, rowid`, ...trozo);
+    for (const f of filas) (mapa[f.nota_id] = mapa[f.nota_id] || []).push({ tipo: f.tipo, id: f.ref_id });
+  }
+  return mapa;
+}
+// Lista de responsables recibida: solo usuarios activos y personas que existen, sin repetidos ni el dueño.
+async function limpiarResponsables(env, lista, dueno) {
+  const usuarios = new Set((await all(env, 'SELECT id FROM usuarios WHERE activo = 1')).map(r => r.id));
+  const personas = new Set((await all(env, 'SELECT id FROM personas')).map(r => r.id));
+  const out = [], vistos = new Set();
+  for (const x of Array.isArray(lista) ? lista : []) {
+    const tipo = x && x.tipo, id = x && x.id;
+    if (!((tipo === 'usuario' && usuarios.has(id) && id !== dueno) || (tipo === 'persona' && personas.has(id)))) continue;
+    if (vistos.has(tipo + ':' + id)) continue;
+    vistos.add(tipo + ':' + id); out.push({ tipo, id });
+  }
+  return out.slice(0, RESP_MAX);
+}
+// Responsables del cuerpo de la petición. La app antigua solo envía persona_id: se cambia la persona y se
+// conservan los usuarios. null = no se tocan.
+async function responsablesDelCuerpo(env, b, actuales, dueno) {
+  if (Array.isArray(b.responsables)) return limpiarResponsables(env, b.responsables, dueno);
+  if ('persona_id' in b) {
+    const usuarios = (actuales || []).filter(r => r.tipo === 'usuario');
+    return limpiarResponsables(env, [...(isId(b.persona_id) ? [{ tipo: 'persona', id: b.persona_id }] : []), ...usuarios], dueno);
+  }
+  return null;
+}
+// Usuarios que participan en una nota (activos): su dueño y los responsables con cuenta o personas vinculadas.
+async function participantes(env, notaId) {
+  const filas = await all(env, `SELECT usuario_id AS u FROM notas WHERE id = ?
+    UNION SELECT ref_id FROM nota_responsables WHERE nota_id = ? AND tipo = 'usuario'
+    UNION SELECT p.usuario_vinculado FROM nota_responsables r JOIN personas p ON p.id = r.ref_id
+      WHERE r.nota_id = ? AND r.tipo = 'persona' AND p.usuario_vinculado IS NOT NULL`, notaId, notaId, notaId);
+  const activos = new Set((await all(env, 'SELECT id FROM usuarios WHERE activo = 1')).map(r => r.id));
+  return [...new Set(filas.map(f => f.u))].filter(u => activos.has(u));
+}
+// Guarda los responsables (conserva quién y cuándo asignó a los que ya estaban; persona_id = primera persona,
+// para la app antigua) y devuelve los usuarios que acaban de entrar, para avisarles.
+async function ponerResponsables(env, notaId, lista) {
+  const antes = await participantes(env, notaId);
+  const previos = Object.fromEntries((await all(env, 'SELECT tipo, ref_id, asignado_por, asignado_en FROM nota_responsables WHERE nota_id = ?', notaId))
+    .map(r => [r.tipo + ':' + r.ref_id, r]));
+  const t = now();
+  const ops = [env.DB.prepare('DELETE FROM nota_responsables WHERE nota_id = ?').bind(notaId)];
+  for (const r of lista) {
+    const prev = previos[r.tipo + ':' + r.id];
+    ops.push(env.DB.prepare('INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en) VALUES (?, ?, ?, ?, ?)')
+      .bind(notaId, r.tipo, r.id, prev ? prev.asignado_por : env.U, prev ? prev.asignado_en : t));
+  }
+  const persona = lista.find(r => r.tipo === 'persona');
+  ops.push(env.DB.prepare('UPDATE notas SET persona_id = ? WHERE id = ?').bind(persona ? persona.id : null, notaId));
+  await env.DB.batch(ops);
+  return (await participantes(env, notaId)).filter(u => !antes.includes(u) && u !== env.U);
+}
+const nombreUsuario = async (env, id) => ((await first(env, 'SELECT nombre FROM usuarios WHERE id = ?', id)) || {}).nombre || 'Alguien';
+async function avisarUsuarios(env, ids, datos) {
+  for (const u of ids) await avisarTodos(conUsuario(env, u), datos);
+}
+async function avisarAsignados(env, nota, nuevos) {
+  if (!nota || !nuevos.length) return;
+  await avisarUsuarios(env, nuevos, { tipo: 'info', tag: 'asignada-' + nota.id, titulo: 'Te han asignado una nota',
+    cuerpo: ((await nombreUsuario(env, env.U)) + ': ' + nota.titulo).slice(0, 180), url: '#/nota/' + nota.id });
+}
+async function avisarHecha(env, nota) {
+  if (!nota) return;
+  const otros = (await participantes(env, nota.id)).filter(u => u !== env.U);
+  if (!otros.length) return;
+  await avisarUsuarios(env, otros, { tipo: 'info', tag: 'hecha-' + nota.id, titulo: 'Nota hecha',
+    cuerpo: ((await nombreUsuario(env, env.U)) + ' ha dado por hecha: ' + nota.titulo).slice(0, 180), url: '#/nota/' + nota.id });
+}
+
+// Registro de tareas hechas compartidas: notas realizadas con algún responsable con cuenta. Cada usuario ve
+// aquellas en las que participa; el administrador, todas. Los filtros los aplica la app.
+async function registroHechas(env) {
+  const compartida = `EXISTS (SELECT 1 FROM nota_responsables r LEFT JOIN personas p ON r.tipo = 'persona' AND p.id = r.ref_id
+    WHERE r.nota_id = notas.id AND (r.tipo = 'usuario' OR p.usuario_vinculado IS NOT NULL))`;
+  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE estado = 'realizada' AND ${compartida}
+    ${env.A ? '' : 'AND ' + VISIBLE} ORDER BY realizada_en DESC LIMIT 2000`, ...(env.A ? [] : vis(env)));
+  const ids = notas.map(n => n.id), mapa = await etiquetasDe(env, ids), resp = await responsablesDe(env, ids);
+  for (const n of notas) { n.etiquetas = mapa[n.id] || []; n.responsables = resp[n.id] || []; prepararNota(n); }
+  const usuarios = await all(env, 'SELECT id, nombre FROM usuarios ORDER BY nombre');   // también los desactivados
+  return { notas, usuarios, todos: !!env.A };
+}
 
 // ---------- Usuarios ----------
 // Cada petición lleva su usuario en env.U (una copia de env por petición; nunca una variable global,
@@ -263,7 +374,7 @@ async function gestionUsuarios(env, M, parts, request, yo) {
 }
 
 // ---------- Notas ----------
-const NOTA_COLS = 'id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version, checklist, repetir, serie, prio_antes, fotos';
+const NOTA_COLS = 'id, usuario_id, realizada_por, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version, checklist, repetir, serie, prio_antes, fotos';
 
 // ---------- Notas recurrentes ----------
 // Al marcar realizada una nota que se repite se crea la siguiente, con id fijo (serie_fecha) para que la app,
@@ -291,6 +402,7 @@ function proximaRepeticion(n) {
     prioridad: n.prio_antes || n.prioridad, persona_id: n.persona_id, fecha_limite: f, hora_limite: n.hora_limite,
     aviso_unidad: n.aviso_unidad, aviso_cant: n.aviso_cant, duracion: n.duracion, subir_critica: n.subir_critica,
     checklist: (n.checklist || []).map(p => ({ t: p.t, hecho: false })), etiquetas: n.etiquetas || [], origen: 'app',
+    responsables: n.responsables || [],
   };
 }
 
@@ -313,7 +425,7 @@ const FOTOS_MAX = 12, FOTO_BYTES = 5 * 1024 * 1024, TIPOS_FOTO = ['mini', 'grand
 const claveFoto = (nota, foto, tipo) => `fotos/${nota}/${foto}-${tipo}.jpg`;
 function hayR2(env) { if (!env.FOTOS) throw new HttpError(500, 'Falta el almacén de fotos (R2) con el nombre FOTOS en el worker.'); }
 async function fotosDe(env, notaId) {
-  const n = await first(env, 'SELECT fotos FROM notas WHERE id = ? AND usuario_id = ?', notaId, env.U);
+  const n = await first(env, `SELECT fotos FROM notas WHERE id = ? AND ${VISIBLE}`, notaId, ...vis(env));
   if (!n) throw new HttpError(404, 'La nota ya no existe.');
   return leerFotos(n.fotos);
 }
@@ -364,9 +476,10 @@ async function etiquetasDe(env, ids) {
 }
 
 async function leerNota(env, id) {
-  const n = await first(env, `SELECT ${NOTA_COLS} FROM notas WHERE id = ? AND usuario_id = ?`, id, env.U);
+  const n = await first(env, `SELECT ${NOTA_COLS} FROM notas WHERE id = ? AND ${VISIBLE}`, id, ...vis(env));
   if (!n) return null;
   n.etiquetas = (await all(env, 'SELECT etiqueta_id FROM nota_etiquetas WHERE nota_id = ?', id)).map(r => r.etiqueta_id);
+  n.responsables = (await responsablesDe(env, [id]))[id] || [];
   return prepararNota(n);
 }
 
@@ -414,7 +527,7 @@ function reprogramar(c, antes) {
 }
 
 async function ponerEtiquetas(env, notaId, ids) {
-  const validas = new Set((await all(env, 'SELECT id FROM etiquetas WHERE usuario_id = ?', env.U)).map(r => r.id));
+  const validas = new Set((await all(env, 'SELECT id FROM etiquetas')).map(r => r.id));   // catálogo común
   const lista = [...new Set((Array.isArray(ids) ? ids : []).filter(id => validas.has(id)))].slice(0, 30);
   const ops = [env.DB.prepare('DELETE FROM nota_etiquetas WHERE nota_id = ?').bind(notaId)];
   for (const id of lista) ops.push(env.DB.prepare('INSERT OR IGNORE INTO nota_etiquetas (nota_id, etiqueta_id) VALUES (?, ?)').bind(notaId, id));
@@ -431,7 +544,7 @@ function efectosEstado(c, antes) {
   c.aviso30 = 0; c.aviso7 = 0;
 }
 
-async function crearNota(env, b, dispositivo) {
+async function crearNota(env, b, dispositivo, { avisar = true } = {}) {
   const id = isId(b.id) ? b.id : uuid();
   const existe = await leerNota(env, id);
   if (existe) return existe;   // reintento de una creación que ya llegó
@@ -443,20 +556,24 @@ async function crearNota(env, b, dispositivo) {
   const t = now();
   const fila = {
     id, usuario_id: env.U, titulo: c.titulo, cuerpo: c.cuerpo || '', prioridad: c.prioridad, estado: c.estado,
-    persona_id: c.persona_id || null, fecha_limite: c.fecha_limite || null, hora_limite: c.hora_limite || null,
+    persona_id: null, fecha_limite: c.fecha_limite || null, hora_limite: c.hora_limite || null,
     aviso_cant: c.aviso_cant || null, aviso_unidad: c.aviso_unidad || null, alarma: c.alarma || null, alarma_enviada: 0,
     subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null, checklist: c.checklist || null,
     repetir: c.repetir || null, serie: c.serie || null,
     origen: ['manual', 'voz', 'app', 'csv'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
     transcripcion: b.transcripcion ? txt(b.transcripcion, 20000) : null,
     creada: t, actualizada: t, realizada_en: c.realizada_en || null, eliminada_en: c.eliminada_en || null, borrar_en: c.borrar_en || null,
-    version: 1,
+    realizada_por: c.estado === 'realizada' ? env.U : null, version: 1,
   };
   const cols = Object.keys(fila);
   await run(env, `INSERT INTO notas (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map(k => fila[k]));
   await ponerEtiquetas(env, id, b.etiquetas);
+  const resp = await responsablesDelCuerpo(env, b, [], env.U);
+  const nuevos = resp ? await ponerResponsables(env, id, resp) : [];
   await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)', id, env.U, t, dispositivo, 'crear', null);
-  return leerNota(env, id);
+  const nota = await leerNota(env, id);
+  if (avisar) await avisarAsignados(env, nota, nuevos);
+  return nota;
 }
 
 async function editarNota(env, ctx, id, b, dispositivo) {
@@ -466,7 +583,12 @@ async function editarNota(env, ctx, id, b, dispositivo) {
     throw new HttpError(409, 'Esta nota se ha modificado desde otro dispositivo.', { conflicto: true, servidor: antes });
   }
   const c = await limpiarCampos(env, b, true);
+  delete c.persona_id;   // va con los responsables
+  if (c.estado === 'papelera' && antes.estado !== 'papelera' && antes.usuario_id !== env.U) {
+    throw new HttpError(403, 'Solo quien creó la nota puede enviarla a la papelera.');
+  }
   efectosEstado(c, antes);
+  if ('estado' in c && c.estado !== antes.estado) c.realizada_por = c.estado === 'realizada' ? env.U : null;
   reprogramar(c, antes);
   if ('alarma' in c && c.alarma === antes.alarma) { delete c.alarma; delete c.alarma_enviada; }
   else if ('alarma' in c) c.alarma_enviada = 0;
@@ -475,18 +597,25 @@ async function editarNota(env, ctx, id, b, dispositivo) {
   const cols = Object.keys(c);
   await run(env, `UPDATE notas SET ${cols.map(k => k + ' = ?').join(', ')}, version = version + 1 WHERE id = ?`, ...cols.map(k => c[k]), id);
   if (Array.isArray(b.etiquetas)) await ponerEtiquetas(env, id, b.etiquetas);
+  const resp = await responsablesDelCuerpo(env, b, antes.responsables, antes.usuario_id);
+  const nuevos = resp ? await ponerResponsables(env, id, resp) : [];
   await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)',
     id, env.U, t, dispositivo, c.estado && c.estado !== antes.estado ? 'estado:' + c.estado : 'editar', JSON.stringify(antes));
   await seguirSerie(env, antes, c.estado, dispositivo);
   // Si el aviso ya se mostró y la nota se ha resuelto o reprogramado, se retira de los demás dispositivos.
   if (antes.alarma_enviada && (c.estado && c.estado !== 'activa' || 'alarma' in c)) ctx.waitUntil(cerrarAvisos(env, id, null));
-  return leerNota(env, id);
+  const nota = await leerNota(env, id);
+  if (!nota) return { id, sin_acceso: true };   // se ha quitado a sí mismo de responsable
+  await avisarAsignados(env, nota, nuevos);
+  if (c.estado === 'realizada' && antes.estado !== 'realizada') await avisarHecha(env, nota);
+  return nota;
 }
 
 // Nota recurrente: al realizarla se crea la siguiente; al deshacer, se quita la siguiente si nadie la ha tocado.
 async function seguirSerie(env, antes, estado, dispositivo) {
   if (!antes.repetir || !estado || estado === antes.estado) return;
-  if (estado === 'realizada' && antes.estado === 'activa') await crearNota(env, proximaRepeticion(antes), dispositivo);
+  // La siguiente repetición es del mismo dueño y con los mismos responsables, la marque quien la marque.
+  if (estado === 'realizada' && antes.estado === 'activa') await crearNota(conUsuario(env, antes.usuario_id), proximaRepeticion(antes), dispositivo, { avisar: false });
   if (estado === 'activa' && antes.estado === 'realizada') {
     const sig = await leerNota(env, proximaRepeticion(antes).id);
     if (sig && sig.version === 1 && sig.estado === 'activa') await borrarDefinitivo(env, [sig.id]);
@@ -499,9 +628,10 @@ async function accionAlarma(env, ctx, id, b, dispositivo) {
   if (b.accion === 'hecha') {
     const c = { estado: 'realizada' };
     efectosEstado(c, n);
-    await run(env, 'UPDATE notas SET estado = ?, realizada_en = ?, eliminada_en = NULL, borrar_en = ?, aviso30 = 0, aviso7 = 0, actualizada = ?, version = version + 1 WHERE id = ?',
-      'realizada', c.realizada_en, c.borrar_en, now(), id);
+    await run(env, 'UPDATE notas SET estado = ?, realizada_en = ?, realizada_por = ?, eliminada_en = NULL, borrar_en = ?, aviso30 = 0, aviso7 = 0, actualizada = ?, version = version + 1 WHERE id = ?',
+      'realizada', c.realizada_en, env.U, c.borrar_en, now(), id);
     await seguirSerie(env, n, 'realizada', dispositivo);
+    if (n.estado !== 'realizada') await avisarHecha(env, await leerNota(env, id));
   } else if (b.accion === 'posponer') {
     const min = Math.min(Math.max(parseInt(b.minutos, 10) || 10, 1), 24 * 60);
     await run(env, 'UPDATE notas SET alarma = ?, alarma_enviada = 0, actualizada = ?, version = version + 1 WHERE id = ?',
@@ -515,11 +645,11 @@ async function accionAlarma(env, ctx, id, b, dispositivo) {
 // ---------- Etiquetas, personas y grupos ----------
 async function guardarEtiqueta(env, id, b) {
   const t = now();
-  const actual = id ? await first(env, 'SELECT * FROM etiquetas WHERE id = ? AND usuario_id = ?', id, env.U) : null;
+  const actual = id ? await first(env, 'SELECT * FROM etiquetas WHERE id = ?', id) : null;   // catálogo común
   if (id && !actual && !b.crear) throw new HttpError(404, 'La etiqueta no existe.');
   const nombre = 'nombre' in b ? String(b.nombre || '').replace(/^#/, '').trim() : actual && actual.nombre;
   if (!nombreEtiquetaOk(nombre)) throw new HttpError(400, 'El nombre de la etiqueta solo puede tener letras, números, guion y guion bajo, sin espacios.');
-  const repetida = (await all(env, 'SELECT id, nombre FROM etiquetas WHERE usuario_id = ?', env.U))
+  const repetida = (await all(env, 'SELECT id, nombre FROM etiquetas'))
     .find(e => norm(e.nombre) === norm(nombre) && e.id !== (actual ? actual.id : id));
   if (repetida) throw new HttpError(409, 'Ya existe la etiqueta #' + repetida.nombre + '.', { etiqueta: repetida });
   const tipo = TIPOS_ETIQUETA.includes(b.tipo) ? b.tipo : (actual ? actual.tipo : 'otra');
@@ -533,6 +663,7 @@ async function guardarEtiqueta(env, id, b) {
   } else {
     let cerrada = actual.cerrada, cerradaEn = actual.cerrada_en;
     if ('cerrada' in b && !!b.cerrada !== !!actual.cerrada) {
+      if (!env.A && actual.usuario_id !== env.U) throw new HttpError(403, 'Solo quien creó la etiqueta o el administrador puede cerrarla o reabrirla.');
       cerrada = b.cerrada ? 1 : 0;
       cerradaEn = cerrada ? t : null;
       if (cerrada) {
@@ -554,10 +685,17 @@ async function guardarPersona(env, id, b) {
   const nombre = txt(b.nombre, 80).trim();
   if (!nombre) throw new HttpError(400, 'Escribe el nombre o el cargo de la persona.');
   const cargo = txt(b.cargo, 80).trim();
-  const existe = id ? await first(env, 'SELECT id FROM personas WHERE id = ? AND usuario_id = ?', id, env.U) : null;
+  const existe = id ? await first(env, 'SELECT id FROM personas WHERE id = ?', id) : null;   // catálogo común
   if (existe) await run(env, 'UPDATE personas SET nombre = ?, cargo = ? WHERE id = ?', nombre, cargo, id);
-  else { id = isId(id) && !(await first(env, 'SELECT 1 AS x FROM personas WHERE id = ?', id)) ? id : uuid(); await run(env, 'INSERT INTO personas (id, usuario_id, nombre, cargo, creada) VALUES (?, ?, ?, ?, ?)', id, env.U, nombre, cargo, now()); }
-  return first(env, 'SELECT id, nombre, cargo FROM personas WHERE id = ?', id);
+  else { id = isId(id) ? id : uuid(); await run(env, 'INSERT INTO personas (id, usuario_id, nombre, cargo, creada) VALUES (?, ?, ?, ?, ?)', id, env.U, nombre, cargo, now()); }
+  if ('usuario_vinculado' in b) {
+    // Vincular una persona a una cuenta comparte con ese usuario todas las notas en que es responsable.
+    if (!env.A) throw new HttpError(403, 'Solo el administrador puede vincular una persona a un usuario.');
+    const u = b.usuario_vinculado ? await first(env, 'SELECT id FROM usuarios WHERE id = ?', b.usuario_vinculado) : null;
+    if (b.usuario_vinculado && !u) throw new HttpError(400, 'El usuario no existe.');
+    await run(env, 'UPDATE personas SET usuario_vinculado = ? WHERE id = ?', u ? u.id : null, id);
+  }
+  return first(env, 'SELECT id, nombre, cargo, usuario_vinculado FROM personas WHERE id = ?', id);
 }
 
 async function guardarVista(env, id, b) {
@@ -577,17 +715,18 @@ async function guardarVista(env, id, b) {
 }
 
 async function leerDatos(env) {
-  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE usuario_id = ? ORDER BY creada`, env.U);
-  const mapa = await etiquetasDe(env, notas.map(n => n.id));
-  for (const n of notas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
-  const etiquetas = await all(env, 'SELECT id, nombre, tipo, alias, cerrada, cerrada_en FROM etiquetas WHERE usuario_id = ? ORDER BY nombre', env.U);
-  const personas = await all(env, 'SELECT id, nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', env.U);
+  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE ${VISIBLE} ORDER BY creada`, ...vis(env));
+  const mapa = await etiquetasDe(env, notas.map(n => n.id)), resp = await responsablesDe(env, notas.map(n => n.id));
+  for (const n of notas) { n.etiquetas = mapa[n.id] || []; n.responsables = resp[n.id] || []; prepararNota(n); }
+  const etiquetas = await all(env, 'SELECT id, nombre, tipo, alias, cerrada, cerrada_en, usuario_id AS creada_por FROM etiquetas ORDER BY nombre');
+  const personas = await all(env, 'SELECT id, nombre, cargo, usuario_vinculado, usuario_id AS creada_por FROM personas ORDER BY nombre');
+  const usuarios = await all(env, 'SELECT id, nombre FROM usuarios WHERE activo = 1 ORDER BY nombre');   // para elegir responsables
   const vistas = (await all(env, 'SELECT id, nombre, filtro, orden FROM vistas WHERE usuario_id = ? ORDER BY orden', env.U))
     .map(v => ({ ...v, filtro: JSON.parse(v.filtro || '{}') }));
   const config = {};
   for (const r of await all(env, `SELECT clave, valor FROM config_usuario WHERE usuario_id = ? AND clave IN (${CONFIG_PUBLICA.map(() => '?').join(',')})`, env.U, ...CONFIG_PUBLICA)) config[r.clave] = r.valor;
   const u = await first(env, 'SELECT * FROM usuarios WHERE id = ?', env.U);
-  return { notas, etiquetas, personas, vistas, config, usuario: u ? usuarioPublico(u) : null, ahora: now(), api: API };
+  return { notas, etiquetas, personas, vistas, config, usuario: u ? usuarioPublico(u) : null, usuarios, ahora: now(), api: API };
 }
 
 // ---------- Informes archivados ----------
@@ -617,8 +756,8 @@ th{background:#EAF3FE}</style></head><body><h1>${esc(titulo)}</h1><p>${notas.len
 
 async function guardarArchivo(env, titulo, motivo, notas) {
   if (!notas.length) return null;
-  const etiquetas = await all(env, 'SELECT id, nombre FROM etiquetas WHERE usuario_id = ?', env.U);
-  const personas = await all(env, 'SELECT id, nombre FROM personas WHERE usuario_id = ?', env.U);
+  const etiquetas = await all(env, 'SELECT id, nombre FROM etiquetas');
+  const personas = await all(env, 'SELECT id, nombre FROM personas');
   const id = uuid();
   await run(env, 'INSERT INTO archivos (id, usuario_id, titulo, motivo, creado, notas, html) VALUES (?, ?, ?, ?, ?, ?, ?)',
     id, env.U, titulo, motivo, now(), notas.length, informeHtml(titulo, notas, etiquetas, personas));
@@ -626,7 +765,8 @@ async function guardarArchivo(env, titulo, motivo, notas) {
 }
 
 async function archivarEtiqueta(env, etiquetaId, nombre, motivo) {
-  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE usuario_id = ? AND id IN (SELECT nota_id FROM nota_etiquetas WHERE etiqueta_id = ?) ORDER BY creada`, env.U, etiquetaId);
+  // Cierre de una obra: el informe lleva todas sus notas, de cualquier usuario (las etiquetas son comunes).
+  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE id IN (SELECT nota_id FROM nota_etiquetas WHERE etiqueta_id = ?) ORDER BY creada`, etiquetaId);
   const mapa = await etiquetasDe(env, notas.map(n => n.id));
   for (const n of notas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
   return guardarArchivo(env, 'Notas de #' + nombre, motivo, notas);
@@ -689,8 +829,8 @@ async function analizar(env, b) {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(500, 'Falta ANTHROPIC_API_KEY en el worker.');
   const texto = txt(b.texto, 30000).trim();
   if (!texto) throw new HttpError(400, 'No hay texto que analizar.');
-  const etiquetas = await all(env, 'SELECT nombre, tipo, alias, cerrada FROM etiquetas WHERE usuario_id = ? ORDER BY tipo, nombre', env.U);
-  const personas = await all(env, 'SELECT nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', env.U);
+  const etiquetas = await all(env, 'SELECT nombre, tipo, alias, cerrada FROM etiquetas ORDER BY tipo, nombre');
+  const personas = await all(env, 'SELECT nombre, cargo FROM personas ORDER BY nombre');
   const listaEt = etiquetas.filter(e => !e.cerrada).map(e => `- ${e.nombre} (${e.tipo}${e.alias ? '; alias: ' + e.alias : ''})`).join('\n') || '(ninguna todavía)';
   const listaPe = personas.map(p => `- ${p.nombre}${p.cargo ? ' (' + p.cargo + ')' : ''}`).join('\n') || '(ninguna todavía)';
   const ahora = txt(b.ahora_local, 60) || new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
@@ -777,7 +917,7 @@ async function transcribir(env, request) {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   const audio = btoa(bin);
-  const nombres = (await all(env, 'SELECT nombre FROM etiquetas WHERE cerrada = 0 AND usuario_id = ? LIMIT 60', env.U)).map(e => e.nombre).join(', ');
+  const nombres = (await all(env, 'SELECT nombre FROM etiquetas WHERE cerrada = 0 LIMIT 60')).map(e => e.nombre).join(', ');
   const prompt = ('Notas de obra. ' + nombres).slice(0, 400);
   let res;
   try { res = await env.AI.run(WHISPER, { audio, language: 'es', vad_filter: true, initial_prompt: prompt }); }
@@ -861,7 +1001,9 @@ async function avisarTodos(env, datos) {
 // Retira el aviso de una nota en los demás dispositivos. En iPhone no se envía: Safari exige mostrar
 // una notificación por cada mensaje recibido y retiraría el permiso.
 async function cerrarAvisos(env, notaId, excepto) {
-  const subs = await all(env, 'SELECT * FROM suscripciones WHERE activo = 1 AND usuario_id = ?', env.U);
+  const us = await participantes(env, notaId);
+  if (!us.length) return;
+  const subs = await all(env, `SELECT * FROM suscripciones WHERE activo = 1 AND usuario_id IN (${us.map(() => '?').join(',')})`, ...us);
   await Promise.all(subs.filter(s => s.endpoint !== excepto && !s.endpoint.includes('push.apple.com'))
     .map(s => enviarPush(env, s, { tipo: 'cerrar', tag: 'nota-' + notaId })));
 }
@@ -869,8 +1011,7 @@ async function cerrarAvisos(env, notaId, excepto) {
 // ---------- Tareas programadas ----------
 async function enviarAlarmas(env) {
   const vencidas = await all(env, `SELECT id, usuario_id, titulo, cuerpo, prioridad, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma FROM notas
-    WHERE estado = 'activa' AND alarma_enviada = 0 AND alarma IS NOT NULL AND alarma <= ?
-      AND usuario_id IN (SELECT id FROM usuarios WHERE activo = 1) ORDER BY alarma LIMIT 40`, now());
+    WHERE estado = 'activa' AND alarma_enviada = 0 AND alarma IS NOT NULL AND alarma <= ? ORDER BY alarma LIMIT 40`, now());
   for (const n of vencidas) {
     // Tras el aviso con antelación queda pendiente el de la hora límite.
     const siguiente = proximoAviso(n, Date.parse(n.alarma));
@@ -879,7 +1020,8 @@ async function enviarAlarmas(env) {
     const titulo = (n.prioridad === 'critica' ? '⚠ ' : '') + n.titulo;
     const limite = n.fecha_limite ? 'Fecha límite: ' + diaEs(n.fecha_limite) + (n.hora_limite ? ' a las ' + n.hora_limite : '') : '';
     const cuerpo = [limite, n.cuerpo || ''].filter(Boolean).join(' · ').slice(0, 180);
-    await avisarTodos(conUsuario(env, n.usuario_id), { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
+    // A todos los que participan: dueño y responsables con cuenta (solo usuarios activos).
+    await avisarUsuarios(env, await participantes(env, n.id), { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
   }
 }
 
@@ -902,7 +1044,7 @@ async function tareaDiaria(env) {
   // 2. Realizadas con más de un año: primero se archiva un informe y después se borran.
   //    Las que pertenecen a una obra todavía abierta se conservan.
   //    Cada usuario recibe su propio informe.
-  const caducadas = await all(env, `SELECT ${NOTA_COLS}, usuario_id FROM notas WHERE estado = 'realizada' AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA} ORDER BY realizada_en`, t);
+  const caducadas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE estado = 'realizada' AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA} ORDER BY realizada_en`, t);
   if (caducadas.length) {
     const mapa = await etiquetasDe(env, caducadas.map(n => n.id));
     for (const n of caducadas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
@@ -963,7 +1105,7 @@ async function resumenMatutino(env, ms = Date.now()) {
       SUM(prioridad = 'critica') AS urgentes,
       SUM(fecha_limite = ? AND hora_limite IS NOT NULL) AS con_hora,
       SUM(actualizada < ?) AS estancadas
-    FROM notas WHERE estado = 'activa' AND usuario_id = ?`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), env.U);
+    FROM notas WHERE estado = 'activa' AND ${VISIBLE}`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), ...vis(env));
   const partes = [[n.urgentes, 'urgente', 'urgentes'], [n.con_hora, 'con hora hoy', 'con hora hoy'], [n.estancadas, 'sin tocar', 'sin tocar']]
     .filter(([k]) => k > 0).map(([k, uno, varios]) => k + ' ' + (k === 1 ? uno : varios));
   if (!partes.length) return null;
@@ -1012,7 +1154,7 @@ export default {
       await ensureSchema(env);
       const yo = await usuarioDelToken(env, token);
       if (!yo) return malToken();
-      env = conUsuario(env, yo.id);
+      env = { ...conUsuario(env, yo.id), A: !!yo.admin };   // A: administrador
 
       const url = new URL(request.url);
       const path = url.pathname.replace(/\/+$/, '') || '/';
@@ -1028,6 +1170,7 @@ export default {
         return json({ ok: true, faltan, version: 1, api: API, usuario: usuarioPublico(yo) });
       }
       if (M === 'GET' && path === '/yo') return json({ usuario: usuarioPublico(yo) });
+      if (M === 'GET' && path === '/registro') return json(await registroHechas(env));
       if (parts[0] === 'usuarios') return json(await gestionUsuarios(env, M, parts, request, yo));
       if (M === 'GET' && path === '/datos') return json(await leerDatos(env));
 
@@ -1038,7 +1181,7 @@ export default {
           const ids = (Array.isArray(b.ids) ? b.ids : []).filter(isId).slice(0, 500);
           for (let i = 0; i < ids.length; i += 90) {
             const trozo = ids.slice(i, i + 90);
-            await run(env, `UPDATE notas SET borrar_en = ?, aviso30 = 0, aviso7 = 0, version = version + 1 WHERE estado = 'realizada' AND usuario_id = ? AND id IN (${trozo.map(() => '?').join(',')})`, plus(RETENCION_REALIZADAS), env.U, ...trozo);
+            await run(env, `UPDATE notas SET borrar_en = ?, aviso30 = 0, aviso7 = 0, version = version + 1 WHERE estado = 'realizada' AND ${VISIBLE} AND id IN (${trozo.map(() => '?').join(',')})`, plus(RETENCION_REALIZADAS), ...vis(env), ...trozo);
           }
           return json({ ok: true, conservadas: ids.length });
         }
@@ -1060,7 +1203,8 @@ export default {
         }
         if (M === 'DELETE' && parts.length === 2) {
           const n = await leerNota(env, id);
-          if (!n) return json({ ok: true });   // no existe o no es de este usuario
+          if (!n) return json({ ok: true });   // no existe o no la ve este usuario
+          if (n.usuario_id !== env.U) return json({ error: 'Solo quien creó la nota puede borrarla.' }, 403);
           if (n.estado !== 'papelera') return json({ error: 'Solo se pueden borrar definitivamente las notas de la papelera.' }, 400);
           await borrarDefinitivo(env, [id]);
           return json({ ok: true });
@@ -1076,7 +1220,9 @@ export default {
         if (M === 'POST' && parts.length === 1) { const b = await readJson(request); return json(await guardarEtiqueta(env, isId(b.id) ? b.id : null, { ...b, crear: true })); }
         if (M === 'PUT' && parts.length === 2) return json(await guardarEtiqueta(env, parts[1], await readJson(request)));
         if (M === 'DELETE' && parts.length === 2) {
-          if (!(await first(env, 'SELECT 1 AS x FROM etiquetas WHERE id = ? AND usuario_id = ?', parts[1], env.U))) return json({ ok: true });
+          const e = await first(env, 'SELECT usuario_id FROM etiquetas WHERE id = ?', parts[1]);
+          if (!e) return json({ ok: true });
+          if (!env.A && e.usuario_id !== env.U) return json({ error: 'Solo quien creó la etiqueta o el administrador puede borrarla.' }, 403);
           await env.DB.batch([
             env.DB.prepare('DELETE FROM nota_etiquetas WHERE etiqueta_id = ?').bind(parts[1]),
             env.DB.prepare('DELETE FROM etiquetas WHERE id = ?').bind(parts[1]),
@@ -1088,9 +1234,12 @@ export default {
         if (M === 'POST' && parts.length === 1) { const b = await readJson(request); return json({ persona: await guardarPersona(env, isId(b.id) ? b.id : null, b) }); }
         if (M === 'PUT' && parts.length === 2) return json({ persona: await guardarPersona(env, parts[1], await readJson(request)) });
         if (M === 'DELETE' && parts.length === 2) {
-          if (!(await first(env, 'SELECT 1 AS x FROM personas WHERE id = ? AND usuario_id = ?', parts[1], env.U))) return json({ ok: true });
+          const pe = await first(env, 'SELECT usuario_id FROM personas WHERE id = ?', parts[1]);
+          if (!pe) return json({ ok: true });
+          if (!env.A && pe.usuario_id !== env.U) return json({ error: 'Solo quien creó la persona o el administrador puede borrarla.' }, 403);
           await env.DB.batch([
-            env.DB.prepare('UPDATE notas SET persona_id = NULL WHERE persona_id = ? AND usuario_id = ?').bind(parts[1], env.U),
+            env.DB.prepare("DELETE FROM nota_responsables WHERE tipo = 'persona' AND ref_id = ?").bind(parts[1]),
+            env.DB.prepare('UPDATE notas SET persona_id = NULL WHERE persona_id = ?').bind(parts[1]),
             env.DB.prepare('DELETE FROM personas WHERE id = ?').bind(parts[1]),
           ]);
           return json({ ok: true });

@@ -74,7 +74,10 @@ try {
 // Base con las tablas de producción del 18/11/2026 y datos inventados; luego el worker nuevo arranca tres veces.
 carpeta = mkdtempSync(join(tmpdir(), 'notas-migracion-fase0-'));
 const VIEJAS = ['notas', 'etiquetas', 'nota_etiquetas', 'personas', 'vistas', 'config'];
-const TODAS = [...VIEJAS, 'suscripciones', 'cambios', 'archivos', 'usuarios', 'config_usuario'];
+const TODAS = [...VIEJAS, 'suscripciones', 'cambios', 'archivos', 'usuarios', 'config_usuario', 'nota_responsables'];
+// Columnas que añaden las fases 3 y siguientes: en la base vieja no existen y nacen vacías.
+const NUEVAS = ['realizada_por', 'usuario_vinculado'];
+const sinNuevas = fs => fs.map(f => Object.fromEntries(Object.entries(f).filter(([k]) => !NUEVAS.includes(k))));
 async function filas(mf, tablas) {
   const db = await mf.getD1Database('DB'), out = {};
   for (const t of tablas) out[t] = (await db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all()).results;
@@ -86,7 +89,7 @@ try {
   for (const q of ESQUEMA_FASE0) await db.prepare(q).run();
   const t = '2026-11-01T08:00:00.000Z';
   await db.batch([
-    db.prepare("INSERT INTO notas (id, titulo, cuerpo, prioridad, estado, fecha_limite, hora_limite, creada, actualizada, version, checklist) VALUES ('nota_vieja_1', 'Pedir hormigón', 'Planta 3', 'alta', 'activa', '2026-12-01', '08:30', ?, ?, 3, '[{\"t\":\"Uno\",\"hecho\":false}]')").bind(t, t),
+    db.prepare("INSERT INTO notas (id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, creada, actualizada, version, checklist) VALUES ('nota_vieja_1', 'Pedir hormigón', 'Planta 3', 'alta', 'activa', 'persona_vieja', '2026-12-01', '08:30', ?, ?, 3, '[{\"t\":\"Uno\",\"hecho\":false}]')").bind(t, t),
     db.prepare("INSERT INTO notas (id, titulo, prioridad, estado, creada, actualizada) VALUES ('nota_vieja_2', 'Sin fecha', 'normal', 'realizada', ?, ?)").bind(t, t),
     db.prepare("INSERT INTO etiquetas (id, nombre, tipo, creada, actualizada) VALUES ('et_vieja_1', 'ObraVieja', 'obra', ?, ?)").bind(t, t),
     db.prepare("INSERT INTO nota_etiquetas (nota_id, etiqueta_id) VALUES ('nota_vieja_1', 'et_vieja_1')"),
@@ -103,7 +106,9 @@ try {
   mf = abrir();
   let r = await call(mf, 'GET', '/estado'); ok(r.s === 200 && r.d.usuario && r.d.usuario.id === 'yo', 'Fase 4: el worker nuevo arranca sobre la base de producción y el APP_TOKEN es "yo"');
   const migrada = await filas(mf, TODAS);
-  for (const t of VIEJAS) ok(isDeepStrictEqual(antes[t], migrada[t]), `Fase 4: tabla ${t} sin cambios (${migrada[t].length} filas)`);
+  for (const t of VIEJAS) ok(isDeepStrictEqual(antes[t], sinNuevas(migrada[t])) && migrada[t].every(f => NUEVAS.every(k => f[k] == null)), `Fase 4: tabla ${t} sin cambios (${migrada[t].length} filas)`);
+  ok(migrada.nota_responsables.length === 1 && migrada.nota_responsables[0].nota_id === 'nota_vieja_1' && migrada.nota_responsables[0].tipo === 'persona'
+    && migrada.nota_responsables[0].ref_id === 'persona_vieja', 'Fase 3: el responsable de antes pasa a la lista de responsables');
   const sinUsuario = (fs) => fs.map(({ usuario_id, ...resto }) => resto);
   for (const t of ['suscripciones', 'cambios', 'archivos']) {
     ok(isDeepStrictEqual(antes[t], sinUsuario(migrada[t])) && migrada[t].every(f => f.usuario_id === 'yo'), `Fase 4: ${t} conserva sus datos y pasa a ser de "yo"`);
@@ -116,6 +121,7 @@ try {
   ok(r.d.notas.length === 2 && r.d.etiquetas.length === 1 && r.d.personas.length === 1 && r.d.vistas.length === 1 && r.d.config.cal_inicio === '6' && r.d.config.revision_dia === '4',
     'Fase 4: con el APP_TOKEN se ven las notas, etiquetas, personas, grupos y ajustes de antes');
   ok(r.d.notas.find(x => x.id === 'nota_vieja_1').etiquetas[0] === 'et_vieja_1' && r.d.notas.find(x => x.id === 'nota_vieja_1').version === 3, 'Fase 4: las notas conservan etiquetas y versión');
+  ok(r.d.notas.find(x => x.id === 'nota_vieja_1').responsables[0].id === 'persona_vieja' && r.d.notas.find(x => x.id === 'nota_vieja_1').persona_id === 'persona_vieja', 'Fase 3: la nota conserva su responsable'); 
   r = await call(mf, 'GET', '/dispositivos'); ok(r.d.dispositivos.length === 1 && r.d.dispositivos[0].nombre === 'Móvil viejo', 'Fase 4: el dispositivo con avisos sigue siendo de Jorge');
   r = await call(mf, 'GET', '/archivos'); ok(r.d.archivos.length === 1, 'Fase 4: los informes archivados siguen siendo de Jorge');
   await mf.dispose();
