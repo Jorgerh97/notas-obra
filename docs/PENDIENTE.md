@@ -5,7 +5,9 @@ Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 ## Versión multiusuario (fase 4), en la rama `fase4-multiusuario` — sin publicar en producción
 - Fase 0 (18 nov 2026): entorno `--env dev` (worker `notas-obra-dev`, D1 `notas-obra-dev-db`, R2 `notas-obra-fotos-dev`, sin cron), copia de producción fuera del repositorio y `test/migracion.test.mjs`.
 - Fase 1 (18 nov 2026), solo en el worker: tabla `usuarios` (token personal, solo se guarda su SHA-256), el `APP_TOKEN` es el usuario `yo` (administrador). Cada petición lleva su usuario (`env.U`) y todo se filtra por él: notas, etiquetas, personas, grupos, ajustes (tabla nueva `config_usuario`, con copia de los de `config`), dispositivos, archivos e historial (columna `usuario_id`, lo existente queda como `yo`). Rutas `GET /yo` y, solo para el administrador, `GET|POST /usuarios`, `PUT /usuarios/:id`, `POST /usuarios/:id/token`. Pruebas: `test/usuarios.test.mjs` y migración desde el esquema real de producción (`test/esquema-fase0.mjs`, sin datos).
-- La app no cambia en la Fase 1 (cada usuario pone su token en Ajustes). Falta: Fase 2 (`puede_dictar`, solo Jorge dicta) y después compartir y asignar notas entre usuarios.
+- La app no cambia en la Fase 1 (cada usuario pone su token en Ajustes).
+- Fase 2 (18 nov 2026): columna `usuarios.puede_dictar` (por defecto 0). El principal puede siempre (`puedeDictar`, aunque su fila tenga 0); al resto se le da o quita con `PUT /usuarios/:id { puede_dictar }` o al darlo de alta. Sin permiso, `/transcribir` y `/analizar` responden 403 `{ sin_permiso: 'dictar' }` antes de gastar nada. App 1.6.0: `/datos` trae `usuario` (se guarda en IndexedDB); sin permiso se ocultan los botones Dictar y el aviso de audios pendientes, y `#/dictado` (también el acceso directo del icono) vuelve al inicio con un aviso. Con un worker sin usuarios (producción actual) todo sigue igual.
+- Falta: compartir y asignar notas entre usuarios.
 
 ## Mejorar la transcripción con ruido de fondo (hablado el 3 nov 2026)
 - Jorge dice que a veces, con ruido, «no se puede analizar». Falta que pase el texto exacto del mensaje.

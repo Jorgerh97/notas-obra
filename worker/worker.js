@@ -24,7 +24,10 @@
 //   GET    /exportar                  Copia completa de los datos en JSON.
 //   GET    /yo                        Usuario del token (id, nombre, admin).
 //   GET|POST /usuarios, PUT /usuarios/:id, POST /usuarios/:id/token   Solo el administrador: alta de usuarios,
-//                                     activar/desactivar y token nuevo (el token solo se devuelve al crearlo).
+//                                     activar/desactivar, permiso de dictado y token nuevo (el token solo se devuelve al crearlo).
+//
+// Dictado (fase 2): /transcribir y /analizar gastan la cuenta de Anthropic y Workers AI de Jorge, así que solo
+// los puede usar quien tenga puede_dictar. El usuario principal lo tiene siempre; los demás empiezan sin él.
 //
 // Usuarios (fase 4): cada usuario tiene su propio token. El APP_TOKEN del worker es el usuario "yo"
 // (Jorge, administrador). De los demás solo se guarda la huella SHA-256 del token, nunca el token.
@@ -153,6 +156,7 @@ const COLUMNAS_NUEVAS = [
   ['notas', 'checklist', 'TEXT'], ['notas', 'repetir', 'TEXT'], ['notas', 'serie', 'TEXT'], ['notas', 'prio_antes', 'TEXT'], ['notas', 'fotos', 'TEXT'],   // 1.3.0
   // Fase 4: dueño de cada dispositivo, informe y cambio. Lo que ya existe es de "yo".
   ['suscripciones', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['archivos', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['cambios', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"],
+  ['usuarios', 'puede_dictar', 'INTEGER DEFAULT 0'],   // fase 2: el principal puede siempre (puedeDictar)
 ];
 let schemaOk = false;
 async function ensureSchema(env) {
@@ -209,7 +213,8 @@ const setCfgU = (env, clave, valor) => run(env, `INSERT INTO config_usuario (usu
 // Cada petición lleva su usuario en env.U (una copia de env por petición; nunca una variable global,
 // porque un mismo worker atiende varias peticiones a la vez).
 const conUsuario = (env, id) => ({ ...env, U: id });
-const usuarioPublico = u => ({ id: u.id, nombre: u.nombre, admin: !!u.admin, activo: !!u.activo });
+const puedeDictar = u => !!u && (u.id === USUARIO_PRINCIPAL || !!u.puede_dictar);
+const usuarioPublico = u => ({ id: u.id, nombre: u.nombre, admin: !!u.admin, activo: !!u.activo, puede_dictar: puedeDictar(u) });
 async function hashToken(token) {
   const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
   return [...h].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -232,7 +237,8 @@ async function gestionUsuarios(env, M, parts, request, yo) {
     const nombre = txt(b.nombre, 60).trim();
     if (!nombre) throw new HttpError(400, 'Escribe el nombre del usuario.');
     const id = uuid(), token = nuevoToken(), t = now();
-    await run(env, 'INSERT INTO usuarios (id, nombre, token_hash, admin, activo, creado, actualizado) VALUES (?, ?, ?, 0, 1, ?, ?)', id, nombre, await hashToken(token), t, t);
+    await run(env, 'INSERT INTO usuarios (id, nombre, token_hash, admin, activo, puede_dictar, creado, actualizado) VALUES (?, ?, ?, 0, 1, ?, ?, ?)',
+      id, nombre, await hashToken(token), b.puede_dictar ? 1 : 0, t, t);
     return { usuario: usuarioPublico(await first(env, 'SELECT * FROM usuarios WHERE id = ?', id)), token };
   }
   const u = parts[1] ? await first(env, 'SELECT * FROM usuarios WHERE id = ?', parts[1]) : null;
@@ -240,9 +246,11 @@ async function gestionUsuarios(env, M, parts, request, yo) {
   if (M === 'PUT' && parts.length === 2) {
     const b = await readJson(request);
     if ('activo' in b && !b.activo && u.id === USUARIO_PRINCIPAL) throw new HttpError(400, 'El usuario principal no se puede desactivar.');
+    if ('puede_dictar' in b && !b.puede_dictar && u.id === USUARIO_PRINCIPAL) throw new HttpError(400, 'El usuario principal siempre puede dictar.');
     const nombre = 'nombre' in b ? txt(b.nombre, 60).trim() || u.nombre : u.nombre;
     const activo = 'activo' in b ? (b.activo ? 1 : 0) : u.activo;
-    await run(env, 'UPDATE usuarios SET nombre = ?, activo = ?, actualizado = ? WHERE id = ?', nombre, activo, now(), u.id);
+    const dictar = 'puede_dictar' in b ? (b.puede_dictar ? 1 : 0) : (u.puede_dictar || 0);
+    await run(env, 'UPDATE usuarios SET nombre = ?, activo = ?, puede_dictar = ?, actualizado = ? WHERE id = ?', nombre, activo, dictar, now(), u.id);
     return { usuario: usuarioPublico(await first(env, 'SELECT * FROM usuarios WHERE id = ?', u.id)) };
   }
   if (M === 'POST' && parts[2] === 'token' && parts.length === 3) {
@@ -1105,6 +1113,9 @@ export default {
         return json({ ok: true });
       }
 
+      if (M === 'POST' && (path === '/transcribir' || path === '/analizar') && !puedeDictar(yo)) {
+        return json({ error: 'Tu usuario no tiene permiso para dictar. Escribe la nota a mano o pide el permiso al administrador.', sin_permiso: 'dictar' }, 403);
+      }
       if (M === 'POST' && path === '/transcribir') return json(await transcribir(env, request));
       if (M === 'POST' && path === '/analizar') return json(await analizar(env, await readJson(request)));
 

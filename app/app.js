@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.5.3';
+const VERSION = '1.6.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -131,8 +131,11 @@ const per = id => S.personas.find(p => p.id === id);
 const nota = id => S.notas.find(n => n.id === id);
 const activas = () => S.notas.filter(n => n.estado === 'activa');
 
+// Dictar gasta la cuenta de Anthropic y Workers AI del administrador: solo quien tenga permiso.
+const puedeDictar = () => !S.usuario || S.usuario.puede_dictar !== false;
+const SIN_DICTADO = 'Tu usuario no puede dictar. Escribe la nota con «Nueva nota».';
 async function guardarLocal() {
-  await idb.set('datos', { notas: S.notas, etiquetas: S.etiquetas, personas: S.personas, vistas: S.vistas, srv: S.srv });
+  await idb.set('datos', { notas: S.notas, etiquetas: S.etiquetas, personas: S.personas, vistas: S.vistas, srv: S.srv, usuario: S.usuario });
 }
 const guardarOutbox = () => idb.set('outbox', { outbox: S.outbox, conflictos: S.conflictos });
 const guardarCfg = () => idb.set('config', S.cfg);
@@ -277,6 +280,7 @@ async function sincronizar() {
     const d = await api('/datos');
     if (S.outbox.length) return;   // hubo cambios mientras llegaban los datos
     S.notas = d.notas; S.etiquetas = d.etiquetas; S.personas = d.personas; S.vistas = d.vistas; S.srv = d.config || {};
+    S.usuario = d.usuario || null;   // fase 4: de quién son los datos y qué puede hacer
     S.workerAntiguo = !(d.api >= API_MIN);
     for (const n of S.notas) n.fotos = conFotosPendientes(n.id, n.fotos || []);   // las que aún no han subido
     if (S.ui.vista && !S.vistas.some(v => v.id === S.ui.vista)) { S.ui.vista = null; S.ui.filtro = filtroVacio(); }
@@ -717,7 +721,7 @@ function renderBase() {
   if (S.workerAntiguo) banners.push(`<div class="banner bad"><span class="grow"><b>Este dispositivo está conectado a un worker antiguo.</b> No se guardan la hora, el checklist, la repetición ni las fotos. Cambia la URL del worker en Ajustes.</span><a class="btn small" href="#/ajustes">Abrir Ajustes</a></div>`);
   if (S.conflictos.length) banners.push(`<div class="banner bad"><span class="grow"><b>${S.conflictos.length === 1 ? 'Una nota se ha editado' : S.conflictos.length + ' notas se han editado'} en dos dispositivos a la vez.</b> Elige qué versión conservar.</span><a class="btn small" href="#/conflicto">Resolver</a></div>`);
   const pend = S.audios.filter(a => a.estado === 'pendiente' || a.estado === 'error' || a.estado === 'transcrito');
-  if (pend.length) banners.push(`<div class="banner warn"><span class="grow"><b>${pend.length === 1 ? 'Tienes 1 audio' : 'Tienes ' + pend.length + ' audios'} sin analizar.</b> Se guardaron sin conexión o falló el análisis.</span><a class="btn small" href="#/dictado">Ver audios</a></div>`);
+  if (pend.length && puedeDictar()) banners.push(`<div class="banner warn"><span class="grow"><b>${pend.length === 1 ? 'Tienes 1 audio' : 'Tienes ' + pend.length + ' audios'} sin analizar.</b> Se guardaron sin conexión o falló el análisis.</span><a class="btn small" href="#/dictado">Ver audios</a></div>`);
   if (toca_revision() && candidatasRevision().length) banners.push(`<div class="banner"><span class="grow"><b>Revisión semanal:</b> ${candidatasRevision().length} notas atrasadas o sin tocar desde hace días.</span><a class="btn small primary" href="#/revision">Empezar</a></div>`);
   const pb = porBorrar(7);
   if (pb.length) banners.push(`<div class="banner warn"><span class="grow"><b>${pb.length === 1 ? '1 nota realizada' : pb.length + ' notas realizadas'} se borrará${pb.length === 1 ? '' : 'n'} esta semana.</b></span><a class="btn small" href="#/historial">Revisar</a></div>`);
@@ -732,7 +736,7 @@ function renderBase() {
     <span id="sync" class="status" title="${esc(S.sync.msg)}">${esc(textoSync())}</span>
     <button class="icon-btn mob-only" data-act="buscar" aria-label="Buscar">${ICON.search}</button>
     <a class="icon-btn mob-only" href="#/menu" aria-label="Menú">${ICON.menu}</a>
-    <a class="btn pill orange desk-only" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>
+    ${puedeDictar() ? `<a class="btn pill orange desk-only" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>` : ''}
     <a class="btn pill primary desk-only" href="#/nota/nueva">${ICON.plus}Nueva nota</a>
   </header>
   ${S.ui.buscar ? `<div class="mob-only" style="padding:8px 16px 0"><label class="search">${ICON.search}<input id="qm" type="search" placeholder="Buscar" value="${esc(S.ui.q)}" aria-label="Buscar"><button class="icon-btn" data-act="cerrar-buscar" aria-label="Cerrar búsqueda" style="width:34px;height:34px">${ICON.close}</button></label></div>` : ''}
@@ -787,7 +791,7 @@ function renderBase() {
     </main>
   </div>
   <div class="bottombar">
-    <a class="btn pill orange" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>
+    ${puedeDictar() ? `<a class="btn pill orange" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>` : ''}
     <a class="btn pill primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a>
   </div>`;
   medirTopbar();
@@ -1317,7 +1321,7 @@ function resumenFiltro(f) {
   return r;
 }
 function vacio(total) {
-  if (!total) return `<div class="empty"><h2>Todavía no hay notas</h2><p>Dicta lo que tengas pendiente o escribe tu primera nota.</p><div class="row"><a class="btn orange" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a><a class="btn primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a></div></div>`;
+  if (!total) return `<div class="empty"><h2>Todavía no hay notas</h2><p>${puedeDictar() ? 'Dicta lo que tengas pendiente o escribe tu primera nota.' : 'Escribe tu primera nota.'}</p><div class="row">${puedeDictar() ? `<a class="btn orange" href="#/dictado" data-act="dictar">${ICON.mic}Dictar</a>` : ''}<a class="btn primary" href="#/nota/nueva">${ICON.plus}Nueva nota</a></div></div>`;
   return `<div class="empty"><h2>No hay notas con estos filtros</h2><p>Prueba a quitar algún filtro o a cambiar la búsqueda.</p><button class="btn" data-act="limpiar-filtro">Quitar filtros</button></div>`;
 }
 
@@ -1375,7 +1379,10 @@ function pintarOverlay() {
   if (a === 'nota') { if (!S.ed || S.ed.ruta !== r) iniciarEditor(b); ov.innerHTML = vistaEditor(); return; }
   if (a === 'filtros') { ov.innerHTML = vistaFiltros(); return; }
   if (a === 'menu') { ov.innerHTML = vistaMenu(); return; }
-  if (a === 'dictado') { ov.innerHTML = vistaDictado(); return; }
+  if (a === 'dictado') {
+    if (!puedeDictar()) { ov.innerHTML = ''; setTimeout(() => { location.replace('#/'); toast(SIN_DICTADO); }); return; }
+    ov.innerHTML = vistaDictado(); return;
+  }
   if (a === 'importar') { ov.innerHTML = S.dic && S.dic.csv ? vistaRevisionDictado() : vistaImportar(); return; }
   if (a === 'historial') { ov.innerHTML = vistaHistorial(); if (S.ui.histTab === 'archivos') cargarArchivos(); return; }
   if (a === 'ajustes') { ov.innerHTML = vistaAjustes(); cargarDispositivos(); return; }
@@ -2567,6 +2574,7 @@ const ACT = {
   'rec-empezar': () => empezarGrabacion(),
   // Botón Dictar: abre el dictado y empieza a grabar sin tener que pulsar otra vez.
   dictar: () => {
+    if (!puedeDictar()) { toast(SIN_DICTADO); return; }
     const D = dic();
     if (ruta() !== 'dictado') location.hash = '#/dictado';
     if (!['grabando', 'pausa', 'procesando'].includes(D.fase)) empezarGrabacion();
@@ -2887,7 +2895,7 @@ async function arrancar() {
     if (Array.isArray(fp)) S.fotosPend = fp;
     if (cfg) Object.assign(S.cfg, cfg);
     if (!S.cfg.dispositivo) S.cfg.dispositivo = nombrePorDefecto();
-    if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; }
+    if (datos) { S.notas = datos.notas || []; S.etiquetas = datos.etiquetas || []; S.personas = datos.personas || []; S.vistas = datos.vistas || []; S.srv = datos.srv || {}; S.usuario = datos.usuario || null; }
     if (ob) { S.outbox = (ob.outbox || []).map(o => ({ ...o, enviando: false })); S.conflictos = ob.conflictos || []; }
     if (audios) S.audios = audios;
     if (ui) { S.ui.modo = MODOS.some(m => m[0] === ui.modo) ? ui.modo : 'lista'; if (ui.cal) Object.assign(S.ui.cal, ui.cal, { ref: '' }); S.ui.agrupar = ui.agrupar || 'fecha'; S.ui.vista = ui.vista || null; S.ui.filtro = { ...filtroVacio(), ...(ui.filtro || {}) }; }

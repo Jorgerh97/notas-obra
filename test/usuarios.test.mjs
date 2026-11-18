@@ -133,5 +133,25 @@ r = await llamar(tokenB2)('GET', '/datos'); ok(r.s === 200 && r.d.usuario.id ===
 const cambios = await db.prepare("SELECT DISTINCT usuario_id FROM cambios WHERE nota_id = 'nota_b_1'").all();
 ok(cambios.results.length === 1 && cambios.results[0].usuario_id === idB, 'el historial guarda qué usuario hizo cada cambio');
 
+// ---------- Fase 2: permiso de dictado ----------
+// En esta prueba no hay ANTHROPIC_API_KEY ni Workers AI: con permiso, la petición pasa y falla después
+// por falta de configuración (500); sin permiso, se rechaza antes (403) sin gastar nada.
+const b2 = llamar(tokenB2);
+r = await yo('GET', '/yo'); ok(r.d.usuario.puede_dictar === true, 'el usuario principal puede dictar');
+r = await b2('GET', '/yo'); ok(r.d.usuario.puede_dictar === false, 'un usuario nuevo empieza sin permiso de dictado');
+r = await b2('GET', '/datos'); ok(r.d.usuario.puede_dictar === false, '/datos indica el permiso de dictado (la app oculta Dictar)');
+r = await b2('POST', '/analizar', { texto: 'Llamar al gruista mañana' }); ok(r.s === 403 && r.d.sin_permiso === 'dictar', 'sin permiso no puede analizar dictados');
+r = await mf.dispatchFetch('http://w/transcribir', { method: 'POST', headers: { Authorization: 'Bearer ' + tokenB2, 'Content-Type': 'audio/webm' }, body: new Uint8Array([1, 2, 3]) });
+ok(r.status === 403, 'sin permiso no puede transcribir audio');
+r = await yo('POST', '/analizar', { texto: 'Llamar al gruista mañana' }); ok(r.s === 500 && /ANTHROPIC_API_KEY/.test(r.d.error), 'el principal pasa el permiso (aquí falla solo por no tener clave)');
+r = await yo('PUT', '/usuarios/yo', { puede_dictar: false }); ok(r.s === 400, 'al usuario principal no se le puede quitar el dictado');
+r = await yo('PUT', '/usuarios/' + idB, { puede_dictar: true }); ok(r.s === 200 && r.d.usuario.puede_dictar === true, 'el administrador da permiso de dictado');
+r = await b2('POST', '/analizar', { texto: 'Llamar al gruista mañana' }); ok(r.s === 500 && /ANTHROPIC_API_KEY/.test(r.d.error), 'con permiso ya pasa la comprobación');
+r = await yo('PUT', '/usuarios/' + idB, { nombre: 'Encargado renombrado' }); ok(r.d.usuario.puede_dictar === true, 'cambiar el nombre no quita el permiso');
+r = await yo('PUT', '/usuarios/' + idB, { puede_dictar: false }); ok(r.d.usuario.puede_dictar === false, 'el administrador quita el permiso');
+r = await b2('POST', '/analizar', { texto: 'x' }); ok(r.s === 403, 'y vuelve a rechazarse');
+r = await b2('PUT', '/usuarios/' + idB, { puede_dictar: true }); ok(r.s === 403, 'un usuario no puede darse permiso a sí mismo');
+r = await yo('POST', '/usuarios', { nombre: 'Con dictado', puede_dictar: true }); ok(r.d.usuario.puede_dictar === true, 'se puede dar de alta un usuario ya con permiso de dictado');
+
 await mf.dispose();
 console.log('Pruebas de usuarios terminadas.');
