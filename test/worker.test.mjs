@@ -263,7 +263,7 @@ const resumenes = () => pushes.map(descifrar).filter(m => m.tag === 'resumen');
 const hace = min => madrid(Date.now() - min * 60000).hora;
 await call('POST', '/notas', { id: 'nota_urgente', titulo: 'Revisar línea de vida', prioridad: 'critica' });
 await call('PUT', '/config', { resumen_activo: '1', resumen_hora: hace(1), resumen_dias: '1,2,3,4,5,6,7' });
-await d1.prepare("DELETE FROM config WHERE clave = 'resumen_ultimo'").run();
+await d1.prepare("DELETE FROM config_usuario WHERE clave = 'resumen_ultimo'").run();
 await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
 await new Promise(res => setTimeout(res, 300));
 const res1 = resumenes();
@@ -271,7 +271,7 @@ ok(res1.length === 1 && res1[0].titulo === 'Buenos días' && /urgente/.test(res1
 await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
 await new Promise(res => setTimeout(res, 300));
 ok(resumenes().length === 1, 'el resumen se envía una sola vez al día');
-await d1.prepare("DELETE FROM config WHERE clave = 'resumen_ultimo'").run();
+await d1.prepare("DELETE FROM config_usuario WHERE clave = 'resumen_ultimo'").run();
 const otroDia = String((new Date(madrid(Date.now()).fecha + 'T12:00:00Z').getUTCDay() + 6) % 7 + 1 === 1 ? 2 : 1);
 await call('PUT', '/config', { resumen_dias: otroDia });
 await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });

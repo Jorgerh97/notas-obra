@@ -2,6 +2,11 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Versión multiusuario (fase 4), en la rama `fase4-multiusuario` — sin publicar en producción
+- Fase 0 (18 nov 2026): entorno `--env dev` (worker `notas-obra-dev`, D1 `notas-obra-dev-db`, R2 `notas-obra-fotos-dev`, sin cron), copia de producción fuera del repositorio y `test/migracion.test.mjs`.
+- Fase 1 (18 nov 2026), solo en el worker: tabla `usuarios` (token personal, solo se guarda su SHA-256), el `APP_TOKEN` es el usuario `yo` (administrador). Cada petición lleva su usuario (`env.U`) y todo se filtra por él: notas, etiquetas, personas, grupos, ajustes (tabla nueva `config_usuario`, con copia de los de `config`), dispositivos, archivos e historial (columna `usuario_id`, lo existente queda como `yo`). Rutas `GET /yo` y, solo para el administrador, `GET|POST /usuarios`, `PUT /usuarios/:id`, `POST /usuarios/:id/token`. Pruebas: `test/usuarios.test.mjs` y migración desde el esquema real de producción (`test/esquema-fase0.mjs`, sin datos).
+- La app no cambia en la Fase 1 (cada usuario pone su token en Ajustes). Falta: Fase 2 (`puede_dictar`, solo Jorge dicta) y después compartir y asignar notas entre usuarios.
+
 ## Mejorar la transcripción con ruido de fondo (hablado el 3 nov 2026)
 - Jorge dice que a veces, con ruido, «no se puede analizar». Falta que pase el texto exacto del mensaje.
 - Hoy: `noiseSuppression` y `echoCancellation` en el micro, 32 kbps, Whisper con `vad_filter` e `initial_prompt` (solo etiquetas).

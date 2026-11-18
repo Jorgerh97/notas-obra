@@ -6,9 +6,10 @@ import { readFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { isDeepStrictEqual } from 'util';
+import { ESQUEMA_FASE0 } from './esquema-fase0.mjs';
 
 const script = readFileSync(new URL('../worker/worker.js', import.meta.url), 'utf8');
-const carpeta = mkdtempSync(join(tmpdir(), 'notas-migracion-'));   // D1 guardada en disco para reabrirla
+let carpeta = mkdtempSync(join(tmpdir(), 'notas-migracion-'));   // D1 guardada en disco para reabrirla
 const H = { Authorization: 'Bearer secreto', 'Content-Type': 'application/json', 'X-Dispositivo': 'Prueba migración' };
 const ok = (c, m) => { if (!c) { console.error('FALLO:', m); process.exitCode = 1; } else console.log('ok -', m); };
 
@@ -22,7 +23,7 @@ async function call(mf, method, path, body) {
   const r = await mf.dispatchFetch('http://w' + path, { method, headers: H, body: body ? JSON.stringify(body) : undefined });
   return { s: r.status, d: await r.json() };
 }
-const TABLAS = ['notas', 'etiquetas', 'nota_etiquetas', 'personas', 'vistas', 'config'];
+const TABLAS = ['notas', 'etiquetas', 'nota_etiquetas', 'personas', 'vistas', 'config', 'usuarios', 'config_usuario'];
 async function foto(mf) {
   const db = await mf.getD1Database('DB');
   const out = {};
@@ -63,6 +64,67 @@ try {
     ok(isDeepStrictEqual(
       { notas: datosAntes.notas, etiquetas: datosAntes.etiquetas, personas: datosAntes.personas, vistas: datosAntes.vistas },
       { notas: datos.notas, etiquetas: datos.etiquetas, personas: datos.personas, vistas: datos.vistas }), `${vez} ejecución: GET /datos devuelve lo mismo`);
+    await mf.dispose();
+  }
+} finally {
+  rmSync(carpeta, { recursive: true, force: true });
+}
+
+// ---------- Fase 4: migración desde el esquema EXACTO de producción (antes de los usuarios) ----------
+// Base con las tablas de producción del 18/11/2026 y datos inventados; luego el worker nuevo arranca tres veces.
+carpeta = mkdtempSync(join(tmpdir(), 'notas-migracion-fase0-'));
+const VIEJAS = ['notas', 'etiquetas', 'nota_etiquetas', 'personas', 'vistas', 'config'];
+const TODAS = [...VIEJAS, 'suscripciones', 'cambios', 'archivos', 'usuarios', 'config_usuario'];
+async function filas(mf, tablas) {
+  const db = await mf.getD1Database('DB'), out = {};
+  for (const t of tablas) out[t] = (await db.prepare(`SELECT * FROM ${t} ORDER BY 1, 2`).all()).results;
+  return out;
+}
+try {
+  let mf = abrir();
+  const db = await mf.getD1Database('DB');
+  for (const q of ESQUEMA_FASE0) await db.prepare(q).run();
+  const t = '2026-11-01T08:00:00.000Z';
+  await db.batch([
+    db.prepare("INSERT INTO notas (id, titulo, cuerpo, prioridad, estado, fecha_limite, hora_limite, creada, actualizada, version, checklist) VALUES ('nota_vieja_1', 'Pedir hormigón', 'Planta 3', 'alta', 'activa', '2026-12-01', '08:30', ?, ?, 3, '[{\"t\":\"Uno\",\"hecho\":false}]')").bind(t, t),
+    db.prepare("INSERT INTO notas (id, titulo, prioridad, estado, creada, actualizada) VALUES ('nota_vieja_2', 'Sin fecha', 'normal', 'realizada', ?, ?)").bind(t, t),
+    db.prepare("INSERT INTO etiquetas (id, nombre, tipo, creada, actualizada) VALUES ('et_vieja_1', 'ObraVieja', 'obra', ?, ?)").bind(t, t),
+    db.prepare("INSERT INTO nota_etiquetas (nota_id, etiqueta_id) VALUES ('nota_vieja_1', 'et_vieja_1')"),
+    db.prepare("INSERT INTO personas (id, nombre, cargo, creada) VALUES ('persona_vieja', 'Encargado', 'Obra', ?)").bind(t),
+    db.prepare("INSERT INTO vistas (id, nombre, filtro, orden) VALUES ('vista_vieja', 'Urgentes', '{}', 1)"),
+    db.prepare("INSERT INTO cambios (nota_id, fecha, dispositivo, accion, antes) VALUES ('nota_vieja_1', ?, 'Móvil', 'crear', NULL)").bind(t),
+    db.prepare("INSERT INTO suscripciones (id, endpoint, p256dh, auth, nombre, plataforma, activo, creada) VALUES ('sub_vieja_1', 'https://push.example/viejo', 'clave', 'auth', 'Móvil viejo', 'Android', 1, ?)").bind(t),
+    db.prepare("INSERT INTO archivos (id, titulo, motivo, creado, notas, html) VALUES ('arch_viejo', 'Informe', 'Prueba', ?, 1, '<p>x</p>')").bind(t),
+    db.prepare("INSERT INTO config (clave, valor) VALUES ('revision_dia', '4'), ('cal_inicio', '6'), ('resumen_hora', '06:45'), ('resumen_ultimo', '2026-11-17'), ('ultimo_diario', '2026-11-18')"),
+  ]);
+  const antes = await filas(mf, [...VIEJAS, 'suscripciones', 'cambios', 'archivos']);
+  await mf.dispose();
+
+  mf = abrir();
+  let r = await call(mf, 'GET', '/estado'); ok(r.s === 200 && r.d.usuario && r.d.usuario.id === 'yo', 'Fase 4: el worker nuevo arranca sobre la base de producción y el APP_TOKEN es "yo"');
+  const migrada = await filas(mf, TODAS);
+  for (const t of VIEJAS) ok(isDeepStrictEqual(antes[t], migrada[t]), `Fase 4: tabla ${t} sin cambios (${migrada[t].length} filas)`);
+  const sinUsuario = (fs) => fs.map(({ usuario_id, ...resto }) => resto);
+  for (const t of ['suscripciones', 'cambios', 'archivos']) {
+    ok(isDeepStrictEqual(antes[t], sinUsuario(migrada[t])) && migrada[t].every(f => f.usuario_id === 'yo'), `Fase 4: ${t} conserva sus datos y pasa a ser de "yo"`);
+  }
+  ok(migrada.usuarios.length === 1 && migrada.usuarios[0].id === 'yo' && migrada.usuarios[0].admin === 1 && !migrada.usuarios[0].token_hash, 'Fase 4: se crea el usuario principal, administrador y sin token guardado');
+  const cu = Object.fromEntries(migrada.config_usuario.map(f => [f.clave, f.usuario_id + ':' + f.valor]));
+  ok(cu.revision_dia === 'yo:4' && cu.cal_inicio === 'yo:6' && cu.resumen_hora === 'yo:06:45' && cu.resumen_ultimo === 'yo:2026-11-17' && !('ultimo_diario' in cu),
+    'Fase 4: los ajustes de Jorge se copian a config_usuario (los globales no)');
+  r = await call(mf, 'GET', '/datos');
+  ok(r.d.notas.length === 2 && r.d.etiquetas.length === 1 && r.d.personas.length === 1 && r.d.vistas.length === 1 && r.d.config.cal_inicio === '6' && r.d.config.revision_dia === '4',
+    'Fase 4: con el APP_TOKEN se ven las notas, etiquetas, personas, grupos y ajustes de antes');
+  ok(r.d.notas.find(x => x.id === 'nota_vieja_1').etiquetas[0] === 'et_vieja_1' && r.d.notas.find(x => x.id === 'nota_vieja_1').version === 3, 'Fase 4: las notas conservan etiquetas y versión');
+  r = await call(mf, 'GET', '/dispositivos'); ok(r.d.dispositivos.length === 1 && r.d.dispositivos[0].nombre === 'Móvil viejo', 'Fase 4: el dispositivo con avisos sigue siendo de Jorge');
+  r = await call(mf, 'GET', '/archivos'); ok(r.d.archivos.length === 1, 'Fase 4: los informes archivados siguen siendo de Jorge');
+  await mf.dispose();
+
+  for (const vez of ['segunda', 'tercera']) {
+    mf = abrir();
+    r = await call(mf, 'GET', '/estado'); ok(r.s === 200, `Fase 4: ${vez} ejecución sin errores`);
+    const otra = await filas(mf, TODAS);
+    ok(TODAS.every(t => isDeepStrictEqual(migrada[t], otra[t])), `Fase 4: ${vez} ejecución no cambia ninguna tabla`);
     await mf.dispose();
   }
 } finally {

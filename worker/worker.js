@@ -22,6 +22,13 @@
 //   POST   /push/prueba               Envía un aviso de prueba.
 //   GET    /archivos, GET|DELETE /archivos/:id   Informes archivados antes de borrar notas.
 //   GET    /exportar                  Copia completa de los datos en JSON.
+//   GET    /yo                        Usuario del token (id, nombre, admin).
+//   GET|POST /usuarios, PUT /usuarios/:id, POST /usuarios/:id/token   Solo el administrador: alta de usuarios,
+//                                     activar/desactivar y token nuevo (el token solo se devuelve al crearlo).
+//
+// Usuarios (fase 4): cada usuario tiene su propio token. El APP_TOKEN del worker es el usuario "yo"
+// (Jorge, administrador). De los demás solo se guarda la huella SHA-256 del token, nunca el token.
+// Todo (notas, etiquetas, personas, grupos, ajustes, dispositivos, archivos) es de cada usuario.
 //
 // Avisos: si la nota tiene hora límite, se avisa en ese momento; además puede tener un aviso con
 // antelación (1-12 horas, 1-7 días o 1-4 semanas). La columna "alarma" guarda el próximo aviso pendiente.
@@ -51,7 +58,9 @@ const TIPOS_ETIQUETA = ['obra', 'industrial', 'accion', 'responsable', 'otra'];
 const CONFIG_PUBLICA = ['revision_dia', 'revision_ultima', 'cal_inicio', 'cal_fin', 'resumen_activo', 'resumen_hora', 'resumen_dias'];
 const RESUMEN = { activo: '1', hora: '07:00', dias: '1,2,3,4,5', margen: 180 };   // margen: minutos tras la hora en que aún se envía
 const ESTANCADA_DIAS = 10;
-const USUARIO = 'yo';   // fase 1: un solo usuario. Preparado para varios.
+const USUARIO_PRINCIPAL = 'yo';   // el usuario del APP_TOKEN (Jorge, administrador)
+// Ajustes de cada usuario (tabla config_usuario). En config quedan los globales: claves VAPID y tarea diaria.
+const CONFIG_USUARIO = [...CONFIG_PUBLICA, 'resumen_ultimo'];
 const AVISO_RANGO = { h: 12, d: 7, s: 4 };   // horas, días o semanas antes (desde 1)
 const HORA_AVISO = '08:00';                  // hora de los avisos cuando la fecha límite no tiene hora
 
@@ -132,21 +141,34 @@ const SCHEMA = [
      plataforma TEXT, activo INTEGER DEFAULT 1, creada TEXT, ultimo_uso TEXT)`,
   `CREATE TABLE IF NOT EXISTS config (clave TEXT PRIMARY KEY, valor TEXT)`,
   `CREATE TABLE IF NOT EXISTS archivos (id TEXT PRIMARY KEY, titulo TEXT, motivo TEXT, creado TEXT, notas INTEGER, html TEXT)`,
+  // Fase 4 (multiusuario)
+  `CREATE TABLE IF NOT EXISTS usuarios (id TEXT PRIMARY KEY, nombre TEXT NOT NULL, token_hash TEXT UNIQUE, admin INTEGER DEFAULT 0,
+     activo INTEGER DEFAULT 1, creado TEXT, actualizado TEXT)`,
+  `CREATE TABLE IF NOT EXISTS config_usuario (usuario_id TEXT NOT NULL, clave TEXT NOT NULL, valor TEXT, PRIMARY KEY (usuario_id, clave))`,
+  `CREATE INDEX IF NOT EXISTS idx_notas_usuario ON notas(usuario_id)`,
 ];
 // Columnas añadidas después de la primera versión (la base de producción ya tiene datos).
 const COLUMNAS_NUEVAS = [
   ['notas', 'hora_limite', 'TEXT'], ['notas', 'aviso_cant', 'INTEGER'], ['notas', 'aviso_unidad', 'TEXT'],   // 1.1.0
   ['notas', 'checklist', 'TEXT'], ['notas', 'repetir', 'TEXT'], ['notas', 'serie', 'TEXT'], ['notas', 'prio_antes', 'TEXT'], ['notas', 'fotos', 'TEXT'],   // 1.3.0
+  // Fase 4: dueño de cada dispositivo, informe y cambio. Lo que ya existe es de "yo".
+  ['suscripciones', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['archivos', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['cambios', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"],
 ];
 let schemaOk = false;
 async function ensureSchema(env) {
   if (schemaOk) return;
   await env.DB.batch(SCHEMA.map(q => env.DB.prepare(q)));
-  const cols = new Set((await all(env, 'PRAGMA table_info(notas)')).map(c => c.name));
+  const colsDe = {};
   for (const [tabla, col, tipo] of COLUMNAS_NUEVAS) {
+    const cols = colsDe[tabla] || (colsDe[tabla] = new Set((await all(env, `PRAGMA table_info(${tabla})`)).map(c => c.name)));
     if (!cols.has(col)) { try { await run(env, `ALTER TABLE ${tabla} ADD COLUMN ${col} ${tipo}`); } catch { /* otra instancia la añadió a la vez */ } }
   }
-  if (!cols.has('hora_limite')) await migrarAlarmas(env);
+  if (!colsDe.notas.has('hora_limite')) await migrarAlarmas(env);
+  // Fase 4: el usuario principal existe siempre y sus ajustes pasan de config a config_usuario (config no
+  // se borra). INSERT OR IGNORE: no pisa lo que el usuario haya cambiado después.
+  await run(env, 'INSERT OR IGNORE INTO usuarios (id, nombre, admin, activo, creado) VALUES (?, ?, 1, 1, ?)', USUARIO_PRINCIPAL, 'Jorge', now());
+  await run(env, `INSERT OR IGNORE INTO config_usuario (usuario_id, clave, valor) SELECT ?, clave, valor FROM config WHERE clave IN (${CONFIG_USUARIO.map(() => '?').join(',')})`,
+    USUARIO_PRINCIPAL, ...CONFIG_USUARIO);
   schemaOk = true;
 }
 
@@ -175,6 +197,62 @@ async function getCfg(env, clave) {
 }
 const setCfg = (env, clave, valor) =>
   run(env, 'INSERT INTO config (clave, valor) VALUES (?, ?) ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor', clave, String(valor));
+// Ajustes del usuario de la petición (env.U).
+async function getCfgU(env, clave) {
+  const r = await first(env, 'SELECT valor FROM config_usuario WHERE usuario_id = ? AND clave = ?', env.U, clave);
+  return r ? r.valor : null;
+}
+const setCfgU = (env, clave, valor) => run(env, `INSERT INTO config_usuario (usuario_id, clave, valor) VALUES (?, ?, ?)
+  ON CONFLICT(usuario_id, clave) DO UPDATE SET valor = excluded.valor`, env.U, clave, String(valor));
+
+// ---------- Usuarios ----------
+// Cada petición lleva su usuario en env.U (una copia de env por petición; nunca una variable global,
+// porque un mismo worker atiende varias peticiones a la vez).
+const conUsuario = (env, id) => ({ ...env, U: id });
+const usuarioPublico = u => ({ id: u.id, nombre: u.nombre, admin: !!u.admin, activo: !!u.activo });
+async function hashToken(token) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token)));
+  return [...h].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+function nuevoToken() {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return 'no_' + btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function usuarioDelToken(env, token) {
+  if (!token) return null;
+  if (token === env.APP_TOKEN) return first(env, 'SELECT * FROM usuarios WHERE id = ?', USUARIO_PRINCIPAL);
+  if (token.length < 20) return null;
+  return first(env, 'SELECT * FROM usuarios WHERE token_hash = ? AND activo = 1', await hashToken(token));
+}
+async function gestionUsuarios(env, M, parts, request, yo) {
+  if (!yo.admin) throw new HttpError(403, 'Solo el administrador puede gestionar usuarios.');
+  if (M === 'GET' && parts.length === 1) return { usuarios: (await all(env, 'SELECT * FROM usuarios ORDER BY creado')).map(usuarioPublico) };
+  if (M === 'POST' && parts.length === 1) {
+    const b = await readJson(request);
+    const nombre = txt(b.nombre, 60).trim();
+    if (!nombre) throw new HttpError(400, 'Escribe el nombre del usuario.');
+    const id = uuid(), token = nuevoToken(), t = now();
+    await run(env, 'INSERT INTO usuarios (id, nombre, token_hash, admin, activo, creado, actualizado) VALUES (?, ?, ?, 0, 1, ?, ?)', id, nombre, await hashToken(token), t, t);
+    return { usuario: usuarioPublico(await first(env, 'SELECT * FROM usuarios WHERE id = ?', id)), token };
+  }
+  const u = parts[1] ? await first(env, 'SELECT * FROM usuarios WHERE id = ?', parts[1]) : null;
+  if (!u) throw new HttpError(404, 'El usuario no existe.');
+  if (M === 'PUT' && parts.length === 2) {
+    const b = await readJson(request);
+    if ('activo' in b && !b.activo && u.id === USUARIO_PRINCIPAL) throw new HttpError(400, 'El usuario principal no se puede desactivar.');
+    const nombre = 'nombre' in b ? txt(b.nombre, 60).trim() || u.nombre : u.nombre;
+    const activo = 'activo' in b ? (b.activo ? 1 : 0) : u.activo;
+    await run(env, 'UPDATE usuarios SET nombre = ?, activo = ?, actualizado = ? WHERE id = ?', nombre, activo, now(), u.id);
+    return { usuario: usuarioPublico(await first(env, 'SELECT * FROM usuarios WHERE id = ?', u.id)) };
+  }
+  if (M === 'POST' && parts[2] === 'token' && parts.length === 3) {
+    if (u.id === USUARIO_PRINCIPAL) throw new HttpError(400, 'El token del usuario principal es el APP_TOKEN del worker: se cambia con wrangler secret put.');
+    const token = nuevoToken();
+    await run(env, 'UPDATE usuarios SET token_hash = ?, actualizado = ? WHERE id = ?', await hashToken(token), now(), u.id);
+    return { usuario: usuarioPublico(u), token };
+  }
+  throw new HttpError(404, 'Ruta no encontrada.');
+}
 
 // ---------- Notas ----------
 const NOTA_COLS = 'id, titulo, cuerpo, prioridad, estado, persona_id, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma, alarma_enviada, subir_critica, duracion, origen, origen_ref, creada, actualizada, realizada_en, eliminada_en, borrar_en, version, checklist, repetir, serie, prio_antes, fotos';
@@ -227,7 +305,7 @@ const FOTOS_MAX = 12, FOTO_BYTES = 5 * 1024 * 1024, TIPOS_FOTO = ['mini', 'grand
 const claveFoto = (nota, foto, tipo) => `fotos/${nota}/${foto}-${tipo}.jpg`;
 function hayR2(env) { if (!env.FOTOS) throw new HttpError(500, 'Falta el almacén de fotos (R2) con el nombre FOTOS en el worker.'); }
 async function fotosDe(env, notaId) {
-  const n = await first(env, 'SELECT fotos FROM notas WHERE id = ? AND usuario_id = ?', notaId, USUARIO);
+  const n = await first(env, 'SELECT fotos FROM notas WHERE id = ? AND usuario_id = ?', notaId, env.U);
   if (!n) throw new HttpError(404, 'La nota ya no existe.');
   return leerFotos(n.fotos);
 }
@@ -278,7 +356,7 @@ async function etiquetasDe(env, ids) {
 }
 
 async function leerNota(env, id) {
-  const n = await first(env, `SELECT ${NOTA_COLS} FROM notas WHERE id = ? AND usuario_id = ?`, id, USUARIO);
+  const n = await first(env, `SELECT ${NOTA_COLS} FROM notas WHERE id = ? AND usuario_id = ?`, id, env.U);
   if (!n) return null;
   n.etiquetas = (await all(env, 'SELECT etiqueta_id FROM nota_etiquetas WHERE nota_id = ?', id)).map(r => r.etiqueta_id);
   return prepararNota(n);
@@ -328,7 +406,7 @@ function reprogramar(c, antes) {
 }
 
 async function ponerEtiquetas(env, notaId, ids) {
-  const validas = new Set((await all(env, 'SELECT id FROM etiquetas WHERE usuario_id = ?', USUARIO)).map(r => r.id));
+  const validas = new Set((await all(env, 'SELECT id FROM etiquetas WHERE usuario_id = ?', env.U)).map(r => r.id));
   const lista = [...new Set((Array.isArray(ids) ? ids : []).filter(id => validas.has(id)))].slice(0, 30);
   const ops = [env.DB.prepare('DELETE FROM nota_etiquetas WHERE nota_id = ?').bind(notaId)];
   for (const id of lista) ops.push(env.DB.prepare('INSERT OR IGNORE INTO nota_etiquetas (nota_id, etiqueta_id) VALUES (?, ?)').bind(notaId, id));
@@ -349,13 +427,14 @@ async function crearNota(env, b, dispositivo) {
   const id = isId(b.id) ? b.id : uuid();
   const existe = await leerNota(env, id);
   if (existe) return existe;   // reintento de una creación que ya llegó
+  if (await first(env, 'SELECT 1 AS x FROM notas WHERE id = ?', id)) throw new HttpError(409, 'Ese identificador de nota ya está en uso.');
   const c = await limpiarCampos(env, b, false);
   c.estado = c.estado || 'activa';
   efectosEstado(c, null);
   reprogramar(c, null);
   const t = now();
   const fila = {
-    id, usuario_id: USUARIO, titulo: c.titulo, cuerpo: c.cuerpo || '', prioridad: c.prioridad, estado: c.estado,
+    id, usuario_id: env.U, titulo: c.titulo, cuerpo: c.cuerpo || '', prioridad: c.prioridad, estado: c.estado,
     persona_id: c.persona_id || null, fecha_limite: c.fecha_limite || null, hora_limite: c.hora_limite || null,
     aviso_cant: c.aviso_cant || null, aviso_unidad: c.aviso_unidad || null, alarma: c.alarma || null, alarma_enviada: 0,
     subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null, checklist: c.checklist || null,
@@ -368,7 +447,7 @@ async function crearNota(env, b, dispositivo) {
   const cols = Object.keys(fila);
   await run(env, `INSERT INTO notas (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map(k => fila[k]));
   await ponerEtiquetas(env, id, b.etiquetas);
-  await run(env, 'INSERT INTO cambios (nota_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?)', id, t, dispositivo, 'crear', null);
+  await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)', id, env.U, t, dispositivo, 'crear', null);
   return leerNota(env, id);
 }
 
@@ -388,8 +467,8 @@ async function editarNota(env, ctx, id, b, dispositivo) {
   const cols = Object.keys(c);
   await run(env, `UPDATE notas SET ${cols.map(k => k + ' = ?').join(', ')}, version = version + 1 WHERE id = ?`, ...cols.map(k => c[k]), id);
   if (Array.isArray(b.etiquetas)) await ponerEtiquetas(env, id, b.etiquetas);
-  await run(env, 'INSERT INTO cambios (nota_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?)',
-    id, t, dispositivo, c.estado && c.estado !== antes.estado ? 'estado:' + c.estado : 'editar', JSON.stringify(antes));
+  await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)',
+    id, env.U, t, dispositivo, c.estado && c.estado !== antes.estado ? 'estado:' + c.estado : 'editar', JSON.stringify(antes));
   await seguirSerie(env, antes, c.estado, dispositivo);
   // Si el aviso ya se mostró y la nota se ha resuelto o reprogramado, se retira de los demás dispositivos.
   if (antes.alarma_enviada && (c.estado && c.estado !== 'activa' || 'alarma' in c)) ctx.waitUntil(cerrarAvisos(env, id, null));
@@ -420,7 +499,7 @@ async function accionAlarma(env, ctx, id, b, dispositivo) {
     await run(env, 'UPDATE notas SET alarma = ?, alarma_enviada = 0, actualizada = ?, version = version + 1 WHERE id = ?',
       new Date(Date.now() + min * 60000).toISOString(), now(), id);
   } else throw new HttpError(400, 'Acción no válida.');
-  await run(env, 'INSERT INTO cambios (nota_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?)', id, now(), dispositivo, 'aviso:' + b.accion, JSON.stringify(n));
+  await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)', id, env.U, now(), dispositivo, 'aviso:' + b.accion, JSON.stringify(n));
   ctx.waitUntil(cerrarAvisos(env, id, typeof b.endpoint === 'string' ? b.endpoint : null));
   return leerNota(env, id);
 }
@@ -428,20 +507,20 @@ async function accionAlarma(env, ctx, id, b, dispositivo) {
 // ---------- Etiquetas, personas y grupos ----------
 async function guardarEtiqueta(env, id, b) {
   const t = now();
-  const actual = id ? await first(env, 'SELECT * FROM etiquetas WHERE id = ? AND usuario_id = ?', id, USUARIO) : null;
+  const actual = id ? await first(env, 'SELECT * FROM etiquetas WHERE id = ? AND usuario_id = ?', id, env.U) : null;
   if (id && !actual && !b.crear) throw new HttpError(404, 'La etiqueta no existe.');
   const nombre = 'nombre' in b ? String(b.nombre || '').replace(/^#/, '').trim() : actual && actual.nombre;
   if (!nombreEtiquetaOk(nombre)) throw new HttpError(400, 'El nombre de la etiqueta solo puede tener letras, números, guion y guion bajo, sin espacios.');
-  const repetida = (await all(env, 'SELECT id, nombre FROM etiquetas WHERE usuario_id = ?', USUARIO))
+  const repetida = (await all(env, 'SELECT id, nombre FROM etiquetas WHERE usuario_id = ?', env.U))
     .find(e => norm(e.nombre) === norm(nombre) && e.id !== (actual ? actual.id : id));
   if (repetida) throw new HttpError(409, 'Ya existe la etiqueta #' + repetida.nombre + '.', { etiqueta: repetida });
   const tipo = TIPOS_ETIQUETA.includes(b.tipo) ? b.tipo : (actual ? actual.tipo : 'otra');
   const alias = 'alias' in b ? txt(b.alias, 300) : (actual ? actual.alias : '');
   let archivo = null;
   if (!actual) {
-    const nuevoId = isId(id) ? id : uuid();
+    const nuevoId = isId(id) && !(await first(env, 'SELECT 1 AS x FROM etiquetas WHERE id = ?', id)) ? id : uuid();
     await run(env, 'INSERT INTO etiquetas (id, usuario_id, nombre, tipo, alias, cerrada, creada, actualizada) VALUES (?, ?, ?, ?, ?, 0, ?, ?)',
-      nuevoId, USUARIO, nombre, tipo, alias, t, t);
+      nuevoId, env.U, nombre, tipo, alias, t, t);
     id = nuevoId;
   } else {
     let cerrada = actual.cerrada, cerradaEn = actual.cerrada_en;
@@ -467,9 +546,9 @@ async function guardarPersona(env, id, b) {
   const nombre = txt(b.nombre, 80).trim();
   if (!nombre) throw new HttpError(400, 'Escribe el nombre o el cargo de la persona.');
   const cargo = txt(b.cargo, 80).trim();
-  const existe = id ? await first(env, 'SELECT id FROM personas WHERE id = ?', id) : null;
+  const existe = id ? await first(env, 'SELECT id FROM personas WHERE id = ? AND usuario_id = ?', id, env.U) : null;
   if (existe) await run(env, 'UPDATE personas SET nombre = ?, cargo = ? WHERE id = ?', nombre, cargo, id);
-  else { id = isId(id) ? id : uuid(); await run(env, 'INSERT INTO personas (id, usuario_id, nombre, cargo, creada) VALUES (?, ?, ?, ?, ?)', id, USUARIO, nombre, cargo, now()); }
+  else { id = isId(id) && !(await first(env, 'SELECT 1 AS x FROM personas WHERE id = ?', id)) ? id : uuid(); await run(env, 'INSERT INTO personas (id, usuario_id, nombre, cargo, creada) VALUES (?, ?, ?, ?, ?)', id, env.U, nombre, cargo, now()); }
   return first(env, 'SELECT id, nombre, cargo FROM personas WHERE id = ?', id);
 }
 
@@ -477,12 +556,12 @@ async function guardarVista(env, id, b) {
   const nombre = txt(b.nombre, 60).trim();
   if (!nombre) throw new HttpError(400, 'El grupo filtrado necesita un nombre.');
   const filtro = JSON.stringify(b.filtro && typeof b.filtro === 'object' ? b.filtro : {}).slice(0, 4000);
-  const existe = id ? await first(env, 'SELECT id FROM vistas WHERE id = ?', id) : null;
+  const existe = id ? await first(env, 'SELECT id FROM vistas WHERE id = ? AND usuario_id = ?', id, env.U) : null;
   if (existe) await run(env, 'UPDATE vistas SET nombre = ?, filtro = ? WHERE id = ?', nombre, filtro, id);
   else {
-    id = isId(id) ? id : uuid();
-    const max = await first(env, 'SELECT COALESCE(MAX(orden), 0) AS m FROM vistas');
-    await run(env, 'INSERT INTO vistas (id, usuario_id, nombre, filtro, orden) VALUES (?, ?, ?, ?, ?)', id, USUARIO, nombre, filtro, (max ? max.m : 0) + 1);
+    id = isId(id) && !(await first(env, 'SELECT 1 AS x FROM vistas WHERE id = ?', id)) ? id : uuid();
+    const max = await first(env, 'SELECT COALESCE(MAX(orden), 0) AS m FROM vistas WHERE usuario_id = ?', env.U);
+    await run(env, 'INSERT INTO vistas (id, usuario_id, nombre, filtro, orden) VALUES (?, ?, ?, ?, ?)', id, env.U, nombre, filtro, (max ? max.m : 0) + 1);
   }
   const v = await first(env, 'SELECT id, nombre, filtro, orden FROM vistas WHERE id = ?', id);
   v.filtro = JSON.parse(v.filtro);
@@ -490,16 +569,17 @@ async function guardarVista(env, id, b) {
 }
 
 async function leerDatos(env) {
-  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE usuario_id = ? ORDER BY creada`, USUARIO);
+  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE usuario_id = ? ORDER BY creada`, env.U);
   const mapa = await etiquetasDe(env, notas.map(n => n.id));
   for (const n of notas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
-  const etiquetas = await all(env, 'SELECT id, nombre, tipo, alias, cerrada, cerrada_en FROM etiquetas WHERE usuario_id = ? ORDER BY nombre', USUARIO);
-  const personas = await all(env, 'SELECT id, nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', USUARIO);
-  const vistas = (await all(env, 'SELECT id, nombre, filtro, orden FROM vistas WHERE usuario_id = ? ORDER BY orden', USUARIO))
+  const etiquetas = await all(env, 'SELECT id, nombre, tipo, alias, cerrada, cerrada_en FROM etiquetas WHERE usuario_id = ? ORDER BY nombre', env.U);
+  const personas = await all(env, 'SELECT id, nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', env.U);
+  const vistas = (await all(env, 'SELECT id, nombre, filtro, orden FROM vistas WHERE usuario_id = ? ORDER BY orden', env.U))
     .map(v => ({ ...v, filtro: JSON.parse(v.filtro || '{}') }));
   const config = {};
-  for (const r of await all(env, `SELECT clave, valor FROM config WHERE clave IN (${CONFIG_PUBLICA.map(() => '?').join(',')})`, ...CONFIG_PUBLICA)) config[r.clave] = r.valor;
-  return { notas, etiquetas, personas, vistas, config, ahora: now(), api: API };
+  for (const r of await all(env, `SELECT clave, valor FROM config_usuario WHERE usuario_id = ? AND clave IN (${CONFIG_PUBLICA.map(() => '?').join(',')})`, env.U, ...CONFIG_PUBLICA)) config[r.clave] = r.valor;
+  const u = await first(env, 'SELECT * FROM usuarios WHERE id = ?', env.U);
+  return { notas, etiquetas, personas, vistas, config, usuario: u ? usuarioPublico(u) : null, ahora: now(), api: API };
 }
 
 // ---------- Informes archivados ----------
@@ -529,16 +609,16 @@ th{background:#EAF3FE}</style></head><body><h1>${esc(titulo)}</h1><p>${notas.len
 
 async function guardarArchivo(env, titulo, motivo, notas) {
   if (!notas.length) return null;
-  const etiquetas = await all(env, 'SELECT id, nombre FROM etiquetas');
-  const personas = await all(env, 'SELECT id, nombre FROM personas');
+  const etiquetas = await all(env, 'SELECT id, nombre FROM etiquetas WHERE usuario_id = ?', env.U);
+  const personas = await all(env, 'SELECT id, nombre FROM personas WHERE usuario_id = ?', env.U);
   const id = uuid();
-  await run(env, 'INSERT INTO archivos (id, titulo, motivo, creado, notas, html) VALUES (?, ?, ?, ?, ?, ?)',
-    id, titulo, motivo, now(), notas.length, informeHtml(titulo, notas, etiquetas, personas));
+  await run(env, 'INSERT INTO archivos (id, usuario_id, titulo, motivo, creado, notas, html) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    id, env.U, titulo, motivo, now(), notas.length, informeHtml(titulo, notas, etiquetas, personas));
   return id;
 }
 
 async function archivarEtiqueta(env, etiquetaId, nombre, motivo) {
-  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE id IN (SELECT nota_id FROM nota_etiquetas WHERE etiqueta_id = ?) ORDER BY creada`, etiquetaId);
+  const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE usuario_id = ? AND id IN (SELECT nota_id FROM nota_etiquetas WHERE etiqueta_id = ?) ORDER BY creada`, env.U, etiquetaId);
   const mapa = await etiquetasDe(env, notas.map(n => n.id));
   for (const n of notas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
   return guardarArchivo(env, 'Notas de #' + nombre, motivo, notas);
@@ -601,8 +681,8 @@ async function analizar(env, b) {
   if (!env.ANTHROPIC_API_KEY) throw new HttpError(500, 'Falta ANTHROPIC_API_KEY en el worker.');
   const texto = txt(b.texto, 30000).trim();
   if (!texto) throw new HttpError(400, 'No hay texto que analizar.');
-  const etiquetas = await all(env, 'SELECT nombre, tipo, alias, cerrada FROM etiquetas WHERE usuario_id = ? ORDER BY tipo, nombre', USUARIO);
-  const personas = await all(env, 'SELECT nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', USUARIO);
+  const etiquetas = await all(env, 'SELECT nombre, tipo, alias, cerrada FROM etiquetas WHERE usuario_id = ? ORDER BY tipo, nombre', env.U);
+  const personas = await all(env, 'SELECT nombre, cargo FROM personas WHERE usuario_id = ? ORDER BY nombre', env.U);
   const listaEt = etiquetas.filter(e => !e.cerrada).map(e => `- ${e.nombre} (${e.tipo}${e.alias ? '; alias: ' + e.alias : ''})`).join('\n') || '(ninguna todavía)';
   const listaPe = personas.map(p => `- ${p.nombre}${p.cargo ? ' (' + p.cargo + ')' : ''}`).join('\n') || '(ninguna todavía)';
   const ahora = txt(b.ahora_local, 60) || new Date().toLocaleString('es-ES', { timeZone: 'Europe/Madrid' });
@@ -689,7 +769,7 @@ async function transcribir(env, request) {
   let bin = '';
   for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   const audio = btoa(bin);
-  const nombres = (await all(env, 'SELECT nombre FROM etiquetas WHERE cerrada = 0 LIMIT 60')).map(e => e.nombre).join(', ');
+  const nombres = (await all(env, 'SELECT nombre FROM etiquetas WHERE cerrada = 0 AND usuario_id = ? LIMIT 60', env.U)).map(e => e.nombre).join(', ');
   const prompt = ('Notas de obra. ' + nombres).slice(0, 400);
   let res;
   try { res = await env.AI.run(WHISPER, { audio, language: 'es', vad_filter: true, initial_prompt: prompt }); }
@@ -763,8 +843,9 @@ async function enviarPush(env, sub, datos) {
   } catch { return false; }
 }
 
+// Avisa a todos los dispositivos del usuario env.U.
 async function avisarTodos(env, datos) {
-  const subs = await all(env, 'SELECT * FROM suscripciones WHERE activo = 1');
+  const subs = await all(env, 'SELECT * FROM suscripciones WHERE activo = 1 AND usuario_id = ?', env.U);
   const res = await Promise.all(subs.map(s => enviarPush(env, s, datos)));
   return res.filter(Boolean).length;
 }
@@ -772,15 +853,16 @@ async function avisarTodos(env, datos) {
 // Retira el aviso de una nota en los demás dispositivos. En iPhone no se envía: Safari exige mostrar
 // una notificación por cada mensaje recibido y retiraría el permiso.
 async function cerrarAvisos(env, notaId, excepto) {
-  const subs = await all(env, 'SELECT * FROM suscripciones WHERE activo = 1');
+  const subs = await all(env, 'SELECT * FROM suscripciones WHERE activo = 1 AND usuario_id = ?', env.U);
   await Promise.all(subs.filter(s => s.endpoint !== excepto && !s.endpoint.includes('push.apple.com'))
     .map(s => enviarPush(env, s, { tipo: 'cerrar', tag: 'nota-' + notaId })));
 }
 
 // ---------- Tareas programadas ----------
 async function enviarAlarmas(env) {
-  const vencidas = await all(env, `SELECT id, titulo, cuerpo, prioridad, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma FROM notas
-    WHERE estado = 'activa' AND alarma_enviada = 0 AND alarma IS NOT NULL AND alarma <= ? ORDER BY alarma LIMIT 40`, now());
+  const vencidas = await all(env, `SELECT id, usuario_id, titulo, cuerpo, prioridad, fecha_limite, hora_limite, aviso_cant, aviso_unidad, alarma FROM notas
+    WHERE estado = 'activa' AND alarma_enviada = 0 AND alarma IS NOT NULL AND alarma <= ?
+      AND usuario_id IN (SELECT id FROM usuarios WHERE activo = 1) ORDER BY alarma LIMIT 40`, now());
   for (const n of vencidas) {
     // Tras el aviso con antelación queda pendiente el de la hora límite.
     const siguiente = proximoAviso(n, Date.parse(n.alarma));
@@ -789,7 +871,7 @@ async function enviarAlarmas(env) {
     const titulo = (n.prioridad === 'critica' ? '⚠ ' : '') + n.titulo;
     const limite = n.fecha_limite ? 'Fecha límite: ' + diaEs(n.fecha_limite) + (n.hora_limite ? ' a las ' + n.hora_limite : '') : '';
     const cuerpo = [limite, n.cuerpo || ''].filter(Boolean).join(' · ').slice(0, 180);
-    await avisarTodos(env, { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
+    await avisarTodos(conUsuario(env, n.usuario_id), { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
   }
 }
 
@@ -811,35 +893,41 @@ async function tareaDiaria(env) {
 
   // 2. Realizadas con más de un año: primero se archiva un informe y después se borran.
   //    Las que pertenecen a una obra todavía abierta se conservan.
-  const caducadas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE estado = 'realizada' AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA} ORDER BY realizada_en`, t);
+  //    Cada usuario recibe su propio informe.
+  const caducadas = await all(env, `SELECT ${NOTA_COLS}, usuario_id FROM notas WHERE estado = 'realizada' AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA} ORDER BY realizada_en`, t);
   if (caducadas.length) {
     const mapa = await etiquetasDe(env, caducadas.map(n => n.id));
     for (const n of caducadas) { n.etiquetas = mapa[n.id] || []; prepararNota(n); }
     const hoy = new Date().toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid' });
-    await guardarArchivo(env, 'Notas realizadas borradas el ' + hoy, 'Más de un año desde que se realizaron', caducadas);
+    for (const [uid, lista] of Object.entries(porUsuario(caducadas)))
+      await guardarArchivo(conUsuario(env, uid), 'Notas realizadas borradas el ' + hoy, 'Más de un año desde que se realizaron', lista);
     await borrarDefinitivo(env, caducadas.map(n => n.id));
   }
 
   // 3. Avisos 30 y 7 días antes del borrado de realizadas.
   for (const [dias, campo] of [[30, 'aviso30'], [7, 'aviso7']]) {
-    const proximas = await all(env, `SELECT id, borrar_en FROM notas WHERE estado = 'realizada' AND ${campo} = 0 AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA}`, plus(dias));
+    const proximas = await all(env, `SELECT id, usuario_id, borrar_en FROM notas WHERE estado = 'realizada' AND ${campo} = 0 AND borrar_en <= ? AND ${SIN_OBRA_ABIERTA}`, plus(dias));
     if (!proximas.length) continue;
     const ids = proximas.map(n => n.id);
     for (let i = 0; i < ids.length; i += 90) {
       const trozo = ids.slice(i, i + 90);
       await run(env, `UPDATE notas SET ${campo} = 1 WHERE id IN (${trozo.map(() => '?').join(',')})`, ...trozo);
     }
-    const fecha = new Date(proximas.map(n => Date.parse(n.borrar_en)).sort()[0]).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'long' });
-    await avisarTodos(env, {
-      tipo: 'info', tag: 'borrado-' + dias,
-      titulo: proximas.length === 1 ? '1 nota realizada se borrará pronto' : proximas.length + ' notas realizadas se borrarán pronto',
-      cuerpo: 'A partir del ' + fecha + '. Ábrelas en Historial para exportarlas o conservarlas.', url: '#/historial',
-    });
+    for (const [uid, lista] of Object.entries(porUsuario(proximas))) {
+      const fecha = new Date(lista.map(n => Date.parse(n.borrar_en)).sort()[0]).toLocaleDateString('es-ES', { timeZone: 'Europe/Madrid', day: 'numeric', month: 'long' });
+      await avisarTodos(conUsuario(env, uid), {
+        tipo: 'info', tag: 'borrado-' + dias,
+        titulo: lista.length === 1 ? '1 nota realizada se borrará pronto' : lista.length + ' notas realizadas se borrarán pronto',
+        cuerpo: 'A partir del ' + fecha + '. Ábrelas en Historial para exportarlas o conservarlas.', url: '#/historial',
+      });
+    }
   }
 
   // 4. Historial de cambios antiguo.
   await run(env, 'DELETE FROM cambios WHERE fecha < ?', plus(-RETENCION_CAMBIOS));
 }
+
+const porUsuario = notas => { const m = {}; for (const n of notas) (m[n.usuario_id] = m[n.usuario_id] || []).push(n); return m; };
 
 async function borrarDefinitivo(env, ids) {
   await borrarFotosDe(env, ids);
@@ -855,19 +943,19 @@ async function borrarDefinitivo(env, ids) {
 // Resumen matutino: una vez al día, a la hora y en los días elegidos (hora de Madrid), un aviso con lo pendiente.
 // Si el worker no corre justo a esa hora, se envía en cuanto pueda dentro del margen. Sin nada pendiente, no se envía.
 async function resumenMatutino(env, ms = Date.now()) {
-  const cfg = async (k, def) => { const v = await getCfg(env, 'resumen_' + k); return v == null || v === '' ? def : v; };
+  const cfg = async (k, def) => { const v = await getCfgU(env, 'resumen_' + k); return v == null || v === '' ? def : v; };
   if ((await cfg('activo', RESUMEN.activo)) === '0') return null;
   const hora = await cfg('hora', RESUMEN.hora), dias = (await cfg('dias', RESUMEN.dias)).split(',').map(Number);
   const p = partesMadrid(ms), dow = (new Date(p.fecha + 'T12:00:00Z').getUTCDay() + 6) % 7 + 1;
   const desde = minutosHora(p.hora) - minutosHora(horaOk(hora) ? hora : RESUMEN.hora);
   if (!dias.includes(dow) || desde < 0 || desde > RESUMEN.margen) return null;
-  if ((await getCfg(env, 'resumen_ultimo')) === p.fecha) return null;
-  await setCfg(env, 'resumen_ultimo', p.fecha);
+  if ((await getCfgU(env, 'resumen_ultimo')) === p.fecha) return null;
+  await setCfgU(env, 'resumen_ultimo', p.fecha);
   const n = await first(env, `SELECT
       SUM(prioridad = 'critica') AS urgentes,
       SUM(fecha_limite = ? AND hora_limite IS NOT NULL) AS con_hora,
       SUM(actualizada < ?) AS estancadas
-    FROM notas WHERE estado = 'activa' AND usuario_id = ?`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), USUARIO);
+    FROM notas WHERE estado = 'activa' AND usuario_id = ?`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), env.U);
   const partes = [[n.urgentes, 'urgente', 'urgentes'], [n.con_hora, 'con hora hoy', 'con hora hoy'], [n.estancadas, 'sin tocar', 'sin tocar']]
     .filter(([k]) => k > 0).map(([k, uno, varios]) => k + ' ' + (k === 1 ? uno : varios));
   if (!partes.length) return null;
@@ -880,7 +968,7 @@ const minutosHora = h => Number(h.slice(0, 2)) * 60 + Number(h.slice(3, 5));
 async function programada(env) {
   await ensureSchema(env);
   await enviarAlarmas(env);
-  await resumenMatutino(env);
+  for (const u of await all(env, 'SELECT id FROM usuarios WHERE activo = 1')) await resumenMatutino(conUsuario(env, u.id));
   const d = new Date();
   if (d.getUTCMinutes() % 15 === 0) await subirPrioridades(env);
   const hoy = d.toLocaleDateString('en-CA', { timeZone: 'Europe/Madrid' });
@@ -908,9 +996,15 @@ export default {
 
     try {
       if (!env.APP_TOKEN) return json({ error: 'Falta APP_TOKEN en el worker.' }, 500);
-      if ((request.headers.get('Authorization') || '') !== 'Bearer ' + env.APP_TOKEN) return json({ error: 'Token incorrecto. Revisa el token en los ajustes de la app.' }, 401);
+      const auth = request.headers.get('Authorization') || '';
+      const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+      const malToken = () => json({ error: 'Token incorrecto. Revisa el token en los ajustes de la app.' }, 401);
+      if (!token || (token !== env.APP_TOKEN && token.length < 20)) return malToken();
       if (!env.DB) return json({ error: 'Falta la base de datos D1 con el nombre DB en el worker.' }, 500);
       await ensureSchema(env);
+      const yo = await usuarioDelToken(env, token);
+      if (!yo) return malToken();
+      env = conUsuario(env, yo.id);
 
       const url = new URL(request.url);
       const path = url.pathname.replace(/\/+$/, '') || '/';
@@ -923,8 +1017,10 @@ export default {
         if (!env.AI) faltan.push('Enlace de Workers AI (AI)');
         if (!env.ANTHROPIC_API_KEY) faltan.push('ANTHROPIC_API_KEY');
         if (!env.FOTOS) faltan.push('Almacén de fotos R2 (FOTOS)');
-        return json({ ok: true, faltan, version: 1, api: API });
+        return json({ ok: true, faltan, version: 1, api: API, usuario: usuarioPublico(yo) });
       }
+      if (M === 'GET' && path === '/yo') return json({ usuario: usuarioPublico(yo) });
+      if (parts[0] === 'usuarios') return json(await gestionUsuarios(env, M, parts, request, yo));
       if (M === 'GET' && path === '/datos') return json(await leerDatos(env));
 
       if (parts[0] === 'notas') {
@@ -934,7 +1030,7 @@ export default {
           const ids = (Array.isArray(b.ids) ? b.ids : []).filter(isId).slice(0, 500);
           for (let i = 0; i < ids.length; i += 90) {
             const trozo = ids.slice(i, i + 90);
-            await run(env, `UPDATE notas SET borrar_en = ?, aviso30 = 0, aviso7 = 0, version = version + 1 WHERE estado = 'realizada' AND id IN (${trozo.map(() => '?').join(',')})`, plus(RETENCION_REALIZADAS), ...trozo);
+            await run(env, `UPDATE notas SET borrar_en = ?, aviso30 = 0, aviso7 = 0, version = version + 1 WHERE estado = 'realizada' AND usuario_id = ? AND id IN (${trozo.map(() => '?').join(',')})`, plus(RETENCION_REALIZADAS), env.U, ...trozo);
           }
           return json({ ok: true, conservadas: ids.length });
         }
@@ -948,6 +1044,7 @@ export default {
           if (M === 'DELETE' && parts.length === 4) return json(await quitarFoto(env, id, parts[3]));
           if (M === 'GET' && TIPOS_FOTO.includes(parts[4])) {
             hayR2(env);
+            await fotosDe(env, id);   // la nota tiene que ser del usuario
             const o = await env.FOTOS.get(claveFoto(id, parts[3], parts[4]));
             if (!o) return json({ error: 'La foto ya no existe.' }, 404);
             return new Response(o.body, { headers: { ...cors, 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=31536000, immutable' } });
@@ -955,13 +1052,14 @@ export default {
         }
         if (M === 'DELETE' && parts.length === 2) {
           const n = await leerNota(env, id);
-          if (n && n.estado !== 'papelera') return json({ error: 'Solo se pueden borrar definitivamente las notas de la papelera.' }, 400);
+          if (!n) return json({ ok: true });   // no existe o no es de este usuario
+          if (n.estado !== 'papelera') return json({ error: 'Solo se pueden borrar definitivamente las notas de la papelera.' }, 400);
           await borrarDefinitivo(env, [id]);
           return json({ ok: true });
         }
       }
       if (M === 'POST' && path === '/papelera/vaciar') {
-        const ids = (await all(env, `SELECT id FROM notas WHERE estado = 'papelera'`)).map(n => n.id);
+        const ids = (await all(env, `SELECT id FROM notas WHERE estado = 'papelera' AND usuario_id = ?`, env.U)).map(n => n.id);
         await borrarDefinitivo(env, ids);
         return json({ ok: true, borradas: ids.length });
       }
@@ -970,6 +1068,7 @@ export default {
         if (M === 'POST' && parts.length === 1) { const b = await readJson(request); return json(await guardarEtiqueta(env, isId(b.id) ? b.id : null, { ...b, crear: true })); }
         if (M === 'PUT' && parts.length === 2) return json(await guardarEtiqueta(env, parts[1], await readJson(request)));
         if (M === 'DELETE' && parts.length === 2) {
+          if (!(await first(env, 'SELECT 1 AS x FROM etiquetas WHERE id = ? AND usuario_id = ?', parts[1], env.U))) return json({ ok: true });
           await env.DB.batch([
             env.DB.prepare('DELETE FROM nota_etiquetas WHERE etiqueta_id = ?').bind(parts[1]),
             env.DB.prepare('DELETE FROM etiquetas WHERE id = ?').bind(parts[1]),
@@ -981,8 +1080,9 @@ export default {
         if (M === 'POST' && parts.length === 1) { const b = await readJson(request); return json({ persona: await guardarPersona(env, isId(b.id) ? b.id : null, b) }); }
         if (M === 'PUT' && parts.length === 2) return json({ persona: await guardarPersona(env, parts[1], await readJson(request)) });
         if (M === 'DELETE' && parts.length === 2) {
+          if (!(await first(env, 'SELECT 1 AS x FROM personas WHERE id = ? AND usuario_id = ?', parts[1], env.U))) return json({ ok: true });
           await env.DB.batch([
-            env.DB.prepare('UPDATE notas SET persona_id = NULL WHERE persona_id = ?').bind(parts[1]),
+            env.DB.prepare('UPDATE notas SET persona_id = NULL WHERE persona_id = ? AND usuario_id = ?').bind(parts[1], env.U),
             env.DB.prepare('DELETE FROM personas WHERE id = ?').bind(parts[1]),
           ]);
           return json({ ok: true });
@@ -991,17 +1091,17 @@ export default {
       if (parts[0] === 'vistas') {
         if (M === 'POST' && parts.length === 1) { const b = await readJson(request); return json({ vista: await guardarVista(env, isId(b.id) ? b.id : null, b) }); }
         if (M === 'PUT' && parts.length === 2) return json({ vista: await guardarVista(env, parts[1], await readJson(request)) });
-        if (M === 'DELETE' && parts.length === 2) { await run(env, 'DELETE FROM vistas WHERE id = ?', parts[1]); return json({ ok: true }); }
+        if (M === 'DELETE' && parts.length === 2) { await run(env, 'DELETE FROM vistas WHERE id = ? AND usuario_id = ?', parts[1], env.U); return json({ ok: true }); }
       }
       if (M === 'PUT' && path === '/vistas-orden') {
         const b = await readJson(request);
         const ids = (Array.isArray(b.ids) ? b.ids : []).filter(isId);
-        if (ids.length) await env.DB.batch(ids.map((id, i) => env.DB.prepare('UPDATE vistas SET orden = ? WHERE id = ?').bind(i + 1, id)));
+        if (ids.length) await env.DB.batch(ids.map((id, i) => env.DB.prepare('UPDATE vistas SET orden = ? WHERE id = ? AND usuario_id = ?').bind(i + 1, id, env.U)));
         return json({ ok: true });
       }
       if (M === 'PUT' && path === '/config') {
         const b = await readJson(request);
-        for (const k of CONFIG_PUBLICA) if (k in b) await setCfg(env, k, txt(b[k], 100));
+        for (const k of CONFIG_PUBLICA) if (k in b) await setCfgU(env, k, txt(b[k], 100));
         return json({ ok: true });
       }
 
@@ -1015,41 +1115,42 @@ export default {
         if (!/^https:\/\//.test(endpoint) || !b.keys || !b.keys.p256dh || !b.keys.auth) return json({ error: 'Suscripción no válida.' }, 400);
         const existe = await first(env, 'SELECT id FROM suscripciones WHERE endpoint = ?', endpoint);
         const id = existe ? existe.id : uuid();
-        await run(env, `INSERT INTO suscripciones (id, endpoint, p256dh, auth, nombre, plataforma, activo, creada) VALUES (?, ?, ?, ?, ?, ?, 1, ?)
-          ON CONFLICT(endpoint) DO UPDATE SET p256dh = excluded.p256dh, auth = excluded.auth, nombre = excluded.nombre, plataforma = excluded.plataforma, activo = 1`,
-          id, endpoint, txt(b.keys.p256dh, 200), txt(b.keys.auth, 100), txt(b.nombre, 60) || disp, txt(b.plataforma, 60), now());
+        // Un mismo navegador puede pasar a otro usuario (otro token): el dispositivo pasa a ser suyo.
+        await run(env, `INSERT INTO suscripciones (id, usuario_id, endpoint, p256dh, auth, nombre, plataforma, activo, creada) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+          ON CONFLICT(endpoint) DO UPDATE SET usuario_id = excluded.usuario_id, p256dh = excluded.p256dh, auth = excluded.auth, nombre = excluded.nombre, plataforma = excluded.plataforma, activo = 1`,
+          id, env.U, endpoint, txt(b.keys.p256dh, 200), txt(b.keys.auth, 100), txt(b.nombre, 60) || disp, txt(b.plataforma, 60), now());
         return json({ ok: true, id });
       }
-      if (M === 'GET' && path === '/dispositivos') return json({ dispositivos: await all(env, 'SELECT id, endpoint, nombre, plataforma, activo, creada, ultimo_uso FROM suscripciones ORDER BY creada') });
+      if (M === 'GET' && path === '/dispositivos') return json({ dispositivos: await all(env, 'SELECT id, endpoint, nombre, plataforma, activo, creada, ultimo_uso FROM suscripciones WHERE usuario_id = ? ORDER BY creada', env.U) });
       if (parts[0] === 'dispositivos' && parts.length === 2) {
         if (M === 'PUT') {
           const b = await readJson(request);
-          if ('nombre' in b) await run(env, 'UPDATE suscripciones SET nombre = ? WHERE id = ?', txt(b.nombre, 60), parts[1]);
-          if ('activo' in b) await run(env, 'UPDATE suscripciones SET activo = ? WHERE id = ?', b.activo ? 1 : 0, parts[1]);
+          if ('nombre' in b) await run(env, 'UPDATE suscripciones SET nombre = ? WHERE id = ? AND usuario_id = ?', txt(b.nombre, 60), parts[1], env.U);
+          if ('activo' in b) await run(env, 'UPDATE suscripciones SET activo = ? WHERE id = ? AND usuario_id = ?', b.activo ? 1 : 0, parts[1], env.U);
           return json({ ok: true });
         }
-        if (M === 'DELETE') { await run(env, 'DELETE FROM suscripciones WHERE id = ?', parts[1]); return json({ ok: true }); }
+        if (M === 'DELETE') { await run(env, 'DELETE FROM suscripciones WHERE id = ? AND usuario_id = ?', parts[1], env.U); return json({ ok: true }); }
       }
       if (M === 'POST' && path === '/push/prueba') {
         const b = await readJson(request).catch(() => ({}));
-        const subs = b && b.id ? await all(env, 'SELECT * FROM suscripciones WHERE id = ?', b.id) : await all(env, 'SELECT * FROM suscripciones WHERE activo = 1');
+        const subs = b && b.id ? await all(env, 'SELECT * FROM suscripciones WHERE id = ? AND usuario_id = ?', b.id, env.U) : await all(env, 'SELECT * FROM suscripciones WHERE activo = 1 AND usuario_id = ?', env.U);
         let ok = 0;
         for (const s of subs) if (await enviarPush(env, s, { tipo: 'info', tag: 'prueba', titulo: 'Aviso de prueba', cuerpo: 'Los avisos de tus notas llegarán así a ' + (s.nombre || 'este dispositivo') + '.' })) ok++;
         return json({ ok: true, enviados: ok, total: subs.length });
       }
 
-      if (M === 'GET' && path === '/archivos') return json({ archivos: await all(env, 'SELECT id, titulo, motivo, creado, notas FROM archivos ORDER BY creado DESC') });
+      if (M === 'GET' && path === '/archivos') return json({ archivos: await all(env, 'SELECT id, titulo, motivo, creado, notas FROM archivos WHERE usuario_id = ? ORDER BY creado DESC', env.U) });
       if (parts[0] === 'archivos' && parts.length === 2) {
         if (M === 'GET') {
-          const a = await first(env, 'SELECT html FROM archivos WHERE id = ?', parts[1]);
+          const a = await first(env, 'SELECT html FROM archivos WHERE id = ? AND usuario_id = ?', parts[1], env.U);
           if (!a) return json({ error: 'El archivo no existe.' }, 404);
           return new Response(a.html, { headers: { ...cors, 'Content-Type': 'text/html; charset=utf-8' } });
         }
-        if (M === 'DELETE') { await run(env, 'DELETE FROM archivos WHERE id = ?', parts[1]); return json({ ok: true }); }
+        if (M === 'DELETE') { await run(env, 'DELETE FROM archivos WHERE id = ? AND usuario_id = ?', parts[1], env.U); return json({ ok: true }); }
       }
       if (M === 'GET' && path === '/exportar') {
         const datos = await leerDatos(env);
-        datos.archivos = await all(env, 'SELECT id, titulo, motivo, creado, notas FROM archivos');
+        datos.archivos = await all(env, 'SELECT id, titulo, motivo, creado, notas FROM archivos WHERE usuario_id = ?', env.U);
         return new Response(JSON.stringify(datos, null, 1), { headers: { ...cors, 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="notas-copia.json"' } });
       }
 
