@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.5.2';
+const VERSION = '1.5.3';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -47,6 +47,8 @@ const finSemana = () => { const d = new Date(); return addDias(hoyYmd(), (7 - d.
 const diaCorto = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, ''); };
 // «12 nov»: fecha de una nota vencida (sin día de la semana ni hora).
 const diaMes = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' }).replace(/\./g, ''); };
+// «26/11»: fecha de una nota que aún no ha vencido.
+const diaNum = ymdStr => { const [, m, d] = ymdStr.split('-'); return d + '/' + m; };
 const diaLargo = ymdStr => { const [y, m, d] = ymdStr.split('-').map(Number); return new Date(y, m - 1, d).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }); };
 const hora = iso => new Date(iso).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
 const fechaCorta = iso => iso ? new Date(iso).toLocaleDateString('es-ES', { day: 'numeric', month: 'short', year: 'numeric' }).replace(/\./g, '') : '';
@@ -643,35 +645,36 @@ function aPapelera(id) {
 }
 
 // ---------- Vista principal ----------
+// Fecha (columna propia, siempre visible) y extras: aviso previo, checklist, repetición y fotos.
 function textoCuando(n) {
-  const partes = [];
+  const extra = [];
+  let fecha = '';
   const h = hoyYmd();
   if (n.fecha_limite) {
-    const hl = n.hora_limite ? ' ' + n.hora_limite : '';
     const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
-    partes.push(`<span class="${late ? 'late' : ''}">${late ? esc(diaMes(n.fecha_limite)) :'⚑ ' + esc(relDia(n.fecha_limite) + hl)}</span>`);
+    fecha = `<span class="${late ? 'late' : ''}">${esc(late ? diaMes(n.fecha_limite) : diaNum(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : ''))}</span>`;
   }
   // El aviso de la hora límite ya se ve en la fecha; aquí solo se muestra el aviso previo.
   const enLimite = n.alarma && n.hora_limite && Date.parse(n.alarma) === momentosAviso({ fecha_limite: n.fecha_limite, hora_limite: n.hora_limite })[0];
   if (n.alarma && !enLimite) {
     const d = ymd(n.alarma);
-    partes.push(`<span class="alarm">🔔 ${d === h ? '' : esc(relDia(d)) + ' '}${esc(hora(n.alarma))}</span>`);
+    extra.push(`<span class="alarm">🔔 ${d === h ? '' : esc(diaNum(d)) + ' '}${esc(hora(n.alarma))}</span>`);
   }
-  if (textoCheck(n)) partes.push(`<span class="chk-n">${textoCheck(n)}</span>`);
-  if (n.repetir) partes.push(`<span class="rep" title="${esc(textoRepetir(n.repetir))}">↻</span>`);
-  if ((n.fotos || []).length) partes.push(`<span class="fotos-n">📷 ${n.fotos.length}</span>`);
-  return partes.join(' ');
+  if (textoCheck(n)) extra.push(`<span class="chk-n">${textoCheck(n)}</span>`);
+  if (n.repetir) extra.push(`<span class="rep" title="${esc(textoRepetir(n.repetir))}">↻</span>`);
+  if ((n.fotos || []).length) extra.push(`<span class="fotos-n">📷 ${n.fotos.length}</span>`);
+  return { fecha, extra: extra.join(' ') };
 }
 function filaNota(n) {
   const tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
-  const p = per(n.persona_id);
+  const p = per(n.persona_id), w = textoCuando(n);
   return `<article class="nota p-${n.prioridad}" data-id="${esc(n.id)}" data-drag="lista" data-titulo="${esc(n.titulo)}" data-cuando="${esc(cuandoCorto(n).t)}">
     <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
     <button class="n-main" data-act="abrir" data-id="${esc(n.id)}">
       <span class="n-prio"><i class="dot"></i>${PRIO_N[n.prioridad]}</span>
-      <span class="n-tit"><i class="dot"></i><span>${esc(n.titulo)}${n.cuerpo ? `<span class="n-inline-body">${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</span></span>
+      <span class="n-tit"><i class="dot"></i><span>${esc(n.titulo)}${w.extra ? `<span class="n-extra-tit">${w.extra}</span>` : ''}${n.cuerpo ? `<span class="n-inline-body">${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</span></span>
       ${n.cuerpo ? `<span class="n-body">${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}
-      <span class="n-meta"><span class="n-tags">${tags}</span><span class="n-who">${p ? esc(p.nombre) : ''}</span><span class="n-when">${textoCuando(n)}</span></span>
+      <span class="n-meta"><span class="n-tags">${tags}</span><span class="n-who">${p ? esc(p.nombre) : ''}</span><span class="n-when">${w.fecha}</span>${w.extra ? `<span class="n-extra">${w.extra}</span>` : ''}</span>
     </button>
   </article>`;
 }
@@ -813,13 +816,15 @@ function notasDeGrupo(conRealizadas) {
   return S.notas.filter(n => (n.estado === 'activa' || (conRealizadas && n.estado === 'realizada'))
     && cumpleFiltro(n, f) && cumpleBusqueda(n, S.ui.q));
 }
-// Fecha corta de una nota: «hoy 12:30», «⚑ vie 2 oct», «25 sep» (vencida, en rojo) o «sin fecha».
+// Fecha corta de una nota: «26/11 17:30», «26/11», «25 sep» (vencida, en rojo) o «sin fecha».
 function cuandoCorto(n) {
-  if (!n.fecha_limite) return { t: 'sin fecha', late: false };
+  if (!n.fecha_limite) return { t: 'sin fecha', f: 'sin fecha', ic: (n.repetir ? '↻' : ''), late: false };
   const h = hoyYmd(), hl = n.hora_limite ? ' ' + n.hora_limite : '';
   const late = n.fecha_limite < h || (n.fecha_limite === h && n.hora_limite && n.hora_limite < hora(Date.now()));
-  if (late) return { t: diaMes(n.fecha_limite), late };
-  return { t: (n.hora_limite ? '' : '⚑ ') + relDia(n.fecha_limite) + hl + (textoAviso(n) ? ' 🔔' : '') + (n.repetir ? ' ↻' : ''), late };
+  if (late) return { t: diaMes(n.fecha_limite), f: diaMes(n.fecha_limite), ic: '', late };
+  // t: fecha con iconos (calendario y arrastres); f: solo la fecha; ic: iconos de aviso y repetición
+  const f = diaNum(n.fecha_limite) + hl, ic = ((textoAviso(n) ? ' 🔔' : '') + (n.repetir ? ' ↻' : '')).trim();
+  return { t: f + (ic ? ' ' + ic : ''), f, ic, late };
 }
 const ordenFecha = (a, b) => String(a.fecha_limite || '9999').localeCompare(String(b.fecha_limite || '9999'))
   || String(a.hora_limite || '99:99').localeCompare(String(b.hora_limite || '99:99'))
@@ -837,9 +842,9 @@ function vistaMatriz() {
       const c = cuandoCorto(n), tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
       return `<div class="mx-row" data-id="${esc(n.id)}" data-drag="prio" data-titulo="${esc(n.titulo)}" data-cuando="${esc(c.t)}">
         <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
-        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${n.cuerpo ? `<span class="mx-body"><span class="mx-sep"> — </span>${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
+        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${c.ic ? ` <span class="rep">${c.ic}</span>` : ''}${n.cuerpo ? `<span class="mx-body"><span class="mx-sep"> — </span>${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
         <span class="mx-tags desk-only">${tags}</span>
-        <span class="mx-when ${c.late ? 'late' : ''}">${esc(c.t)}</span>
+        <span class="mx-when ${c.late ? 'late' : ''}">${esc(c.f)}</span>
       </div>`;
     };
     return `<section class="mx-q p-${p}" data-drop="prio" data-prio="${p}">

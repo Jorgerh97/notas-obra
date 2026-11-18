@@ -23,11 +23,15 @@ Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 - Si se borra el worker antiguo `proud-salad-c6ba` (solo con su confirmación y comprobando que nadie lo usa).
 - Si ha quitado la clave antigua de Anthropic de la web y de `Anotaciones.txt`. La clave nueva se puso el 3 nov 2026.
 
+## Hecho en la versión 1.5.3 (18 nov 2026)
+- Fechas no vencidas como «26/11 17:30» o «26/11» (`diaNum`), en la app entera (antes «⚑ vie, 20 nov», «hoy», «mañana»). Vencidas, igual que en la 1.5.2: «12 nov».
+- Lista y Matriz en ordenador y tablet: columnas de etiquetas estrechas (90-100 px, cortadas con «…»; en la Matriz, 80 px) y fecha de ancho fijo (76-80 px). Los iconos de checklist, aviso previo, repetición y fotos van detrás del título (`.n-extra-tit`; en la Matriz, `cuandoCorto().ic`) y no ocupan columna. En el móvil siguen en la línea de abajo (`.n-extra`).
+- Con esto, la Matriz en ordenador ya deja sitio a la descripción (315 px en lugar de 185 a 1440 px).
+
 ## Hecho en la versión 1.5.2 (18 nov 2026)
 - Nota vencida: solo la fecha, «12 nov» (`diaMes`), sin «venció» ni hora, en rojo y negrita (Lista, Matriz y Calendario). El PDF para reunión sigue poniendo «Venció».
 - Tablet en horizontal (900-1199 px): en la Lista, título y descripción en hasta 3 líneas y la fecha encima de las etiquetas en una columna estrecha; en la Matriz, sin etiquetas y con el texto en hasta 3 líneas. Tablet en vertical (600-899 px): la Matriz muestra la descripción en una segunda línea.
 - Arreglo: en tablet la barra superior se salía por la derecha (el botón «Nueva nota» quedaba cortado).
-- Sin cambiar (Jorge no lo ha pedido): en ordenador (≥ 1200 px) la Matriz sigue dejando poco sitio a la descripción.
 - Jorge descartó cambiar el tipo de letra (bocetos en https://claude.ai/artifact/ULs1wjzaMWTEU8jTR3v2P6).
 
 ## Hecho en la versión 1.5.1 (6 nov 2026)

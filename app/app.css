@@ -87,6 +87,7 @@ svg.i { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-widt
 .status.err { background: var(--red-tint); color: var(--red); }
 @media (max-width: 899px) { .desk-only { display: none !important; } }
 .n-inline-body { display: none; }
+.n-extra-tit { display: none; }
 
 .layout { flex: 1; display: flex; min-height: 0; }
 .sidebar { display: none; }
@@ -422,7 +423,7 @@ body.con-ov .toasts { bottom: auto; top: calc(64px + env(safe-area-inset-top)); 
   .mx-head { padding: 10px 14px; }
   .mx-head h3 { font-size: 19px; }
   .mx-rows { flex: 1; min-height: 0; overflow-y: auto; }
-  .mx-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, 170px) 110px; gap: 10px; padding-right: 14px; cursor: grab; user-select: none; }
+  .mx-row { display: grid; grid-template-columns: 32px minmax(0, 1fr) minmax(0, 80px) 76px; gap: 8px; padding-right: 14px; cursor: grab; user-select: none; }
   .mx-body { display: inline; }
   .mx-tags { font-size: 13px; font-weight: 600; color: var(--primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .mx-when { font-size: 13px; text-align: right; }
@@ -548,16 +549,18 @@ body.con-ov .toasts { bottom: auto; top: calc(64px + env(safe-area-inset-top)); 
   .nota { border: 0; border-top: 1px solid var(--line-soft); border-radius: 0; align-items: center; padding: 2px 12px 2px 6px; min-height: 42px; }
   .nota:first-child { border-top: 0; }
   .nota:hover { background: var(--bg); }
-  .n-main { display: grid; grid-template-columns: 76px minmax(0, 1fr) minmax(0, 200px) 170px; align-items: center; gap: 12px; padding: 0; }
+  .n-main { display: grid; grid-template-columns: 76px minmax(0, 1fr) minmax(0, 90px) 76px; align-items: center; gap: 10px; padding: 0; }
   .n-tit { display: contents; }
   .n-tit .dot { display: none; }
   .n-prio { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--p-ink); grid-column: 1; grid-row: 1; }
   .n-tit span { grid-column: 2; grid-row: 1; font-size: 14px; }
   .n-body { display: none; }
   .n-meta { display: contents; font-size: 13px; }
-  .n-meta .n-tags { grid-column: 3; }
+  .n-meta .n-extra { display: none; }
+  .n-extra-tit { display: inline; margin-left: 8px; font-size: 12px; }
+  .n-meta .n-tags { grid-column: 3; white-space: nowrap; }
   .n-meta .n-who { display: none; }
-  .n-meta .n-when { grid-column: 4; text-align: right; }
+  .n-meta .n-when { grid-column: 4; text-align: right; white-space: nowrap; }
   .n-inline-body { display: inline; font-weight: 400; color: var(--muted); margin-left: 10px; }
   .overlay { align-items: center; padding: 24px; }
   .page { max-width: 760px; height: auto; max-height: 100%; border-radius: 14px; box-shadow: var(--shadow); }
@@ -573,13 +576,13 @@ body.con-ov .toasts { bottom: auto; top: calc(64px + env(safe-area-inset-top)); 
 /* Tablet en horizontal: la descripción va antes que las etiquetas y la fecha (hasta tres líneas);
    fecha y etiquetas, una encima de otra en una columna estrecha a la derecha */
 @media (min-width: 900px) and (max-width: 1199px) {
-  .n-main { grid-template-columns: 76px minmax(0, 1fr) 124px; grid-template-rows: auto auto; row-gap: 0; }
+  .n-main { grid-template-columns: 76px minmax(0, 1fr) 80px; grid-template-rows: auto auto; row-gap: 0; }
   .n-prio { grid-row: 1 / span 2; }
   .n-tit > span { grid-row: 1 / span 2; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; padding: 5px 0; }
   .n-tit .n-inline-body { white-space: normal; }
-  .n-meta .n-when { grid-column: 3; grid-row: 1; align-self: end; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .n-meta .n-when { grid-column: 3; grid-row: 1; align-self: end; white-space: nowrap; }
   .n-meta .n-tags { grid-column: 3; grid-row: 2; align-self: start; text-align: right; font-size: 12px; white-space: nowrap; }
-  .mx-row { grid-template-columns: 32px minmax(0, 1fr) auto; }
+  .mx-row { grid-template-columns: 32px minmax(0, 1fr) 76px; }
   .mx-main { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; padding: 0; margin: 6px 0; }
   /* La barra superior cabe sin desplazamiento horizontal (antes «Nueva nota» se salía por la derecha) */
   .topbar { gap: 10px; padding: 8px 16px; }
@@ -588,7 +591,7 @@ body.con-ov .toasts { bottom: auto; top: calc(64px + env(safe-area-inset-top)); 
   .mx-row .mx-tags { display: none !important; }
 }
 @media (min-width: 1200px) {
-  .n-meta .n-who { display: block; grid-column: 4; }
-  .n-main { grid-template-columns: 76px minmax(0, 1fr) minmax(0, 210px) 130px 170px; }
+  .n-meta .n-who { display: block; grid-column: 4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .n-main { grid-template-columns: 76px minmax(0, 1fr) minmax(0, 100px) minmax(0, 120px) 76px; }
   .n-meta .n-when { grid-column: 5; }
 }
