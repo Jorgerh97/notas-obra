@@ -71,6 +71,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.5.3** (18 nov 2026): fechas «26/11 17:30», etiquetas y fecha más estrechas en Lista y Matriz, iconos junto al título → `docs/PENDIENTE.md`.
 - **1.7.1 multiusuario** (18 nov 2026, en producción): fases 0 a 3 (entorno dev, usuarios y token, permiso de dictado, notas compartidas, registro, barra lateral con usuarios, traspaso de persona a usuario) → `docs/PENDIENTE.md` y `docs/PASO-PRODUCCION.md`. Para volver atrás: etiqueta local `v1.5.3` y worker `79c96957-ff07-40f5-ad15-5d131b10aa1e`.
 - **1.8.0** (19 nov 2026): importar calendarios de Outlook (.ics) y varios archivos a la vez → `docs/PENDIENTE.md`.
+- **1.8.1** (19 nov 2026): «Horario ampliado» (7:00 – 24:00) en el Calendario y botón «Copiar» en las notas → `docs/PENDIENTE.md`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

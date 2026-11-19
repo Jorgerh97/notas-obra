@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.8.0';
+const VERSION = '1.8.1';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -117,7 +117,7 @@ const S = {
   cfg: { url: '', token: '', dispositivo: '', pushEndpoint: '' },
   notas: [], etiquetas: [], personas: [], vistas: [], srv: {},
   outbox: [], conflictos: [], audios: [],
-  ui: { modo: 'lista', matrizMas: {}, cal: { vista: 'semana', ref: '', realizadas: true, finde: true }, agrupar: 'fecha', vista: null, filtro: filtroVacio(), q: '', buscar: false, histTab: 'realizadas', histQ: '' },
+  ui: { modo: 'lista', matrizMas: {}, cal: { vista: 'semana', ref: '', realizadas: true, finde: true, ampliado: false }, agrupar: 'fecha', vista: null, filtro: filtroVacio(), q: '', buscar: false, histTab: 'realizadas', histQ: '' },
   sync: { estado: 'local', msg: '' },
   flushing: false,
   ed: null, dic: null, rev: null, modal: null,
@@ -169,7 +169,7 @@ async function guardarLocal() {
 const guardarOutbox = () => idb.set('outbox', { outbox: S.outbox, conflictos: S.conflictos });
 const guardarCfg = () => idb.set('config', S.cfg);
 const guardarAudios = () => idb.set('audios', S.audios);
-const guardarUi = () => idb.set('ui', { modo: S.ui.modo, cal: { vista: S.ui.cal.vista, realizadas: S.ui.cal.realizadas, finde: S.ui.cal.finde }, agrupar: S.ui.agrupar, vista: S.ui.vista, filtro: S.ui.filtro });
+const guardarUi = () => idb.set('ui', { modo: S.ui.modo, cal: { vista: S.ui.cal.vista, realizadas: S.ui.cal.realizadas, finde: S.ui.cal.finde, ampliado: S.ui.cal.ampliado }, agrupar: S.ui.agrupar, vista: S.ui.vista, filtro: S.ui.filtro });
 
 // ---------- Conexión con el worker ----------
 async function api(path, opt = {}) {
@@ -927,7 +927,10 @@ const DIAS_LARGOS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sáb
 const pad2 = n => String(n).padStart(2, '0');
 const mayus = s => s.charAt(0).toUpperCase() + s.slice(1);
 // Horario visible (ajuste compartido entre dispositivos): 7:00–19:00 por defecto.
-const calHorario = () => { const i = Number(S.srv.cal_inicio), f = Number(S.srv.cal_fin); return S.srv.cal_inicio != null && i >= 0 && f > i && f <= 24 ? [i, f] : [7, 19]; };
+const calHorarioBase = () => { const i = Number(S.srv.cal_inicio), f = Number(S.srv.cal_fin); return S.srv.cal_inicio != null && i >= 0 && f > i && f <= 24 ? [i, f] : [7, 19]; };
+// «Horario ampliado» (barra lateral del Calendario): de 7:00 a 24:00, sin cambiar el horario habitual.
+const HORARIO_AMPLIADO = [7, 24];
+const calHorario = () => (S.ui.cal.ampliado ? HORARIO_AMPLIADO : calHorarioBase());
 const lunesDe = f => { const [y, m, d] = f.split('-').map(Number); return addDias(f, -((new Date(y, m - 1, d).getDay() + 6) % 7)); };
 const minutosDe = h => { const [a, b] = h.split(':').map(Number); return a * 60 + b; };
 const durNota = n => n.duracion || DURACION_DEF;
@@ -1129,7 +1132,7 @@ document.addEventListener('touchend', ev => {
 
 // Panel lateral del calendario (ordenador): mes pequeño, leyenda y opciones (debajo de grupos y responsables).
 function calLateral() {
-  const c = cal(), notas = notasCal(), [ini, fin] = calHorario(), hoy = hoyYmd();
+  const c = cal(), notas = notasCal(), [ini, fin] = calHorarioBase(), hoy = hoyYmd();
   const [y, m] = c.ref.split('-').map(Number), primero = lunesDe(`${y}-${pad2(m)}-01`), lun = lunesDe(c.ref);
   const mini = Array.from({ length: 42 }, (_, i) => {
     const f = addDias(primero, i), [, mm, dd] = f.split('-').map(Number);
@@ -1145,8 +1148,9 @@ function calLateral() {
       <div>Con hora · ⚑ Solo fecha · 🔔 Aviso previo</div>
       <div class="cal-carga">Carga del día: <i class="carga0"></i><i class="carga1"></i><i class="carga2"></i><i class="carga3"></i></div>
       <label class="check"><input type="checkbox" data-cal="realizadas" ${c.realizadas ? 'checked' : ''}>Mostrar realizadas en gris</label>
-      <label class="field"><span class="cal-lbl">Horario visible</span><select class="input" data-cal="horario">${HORARIOS.map(([a, b]) => `<option value="${a}-${b}" ${a === ini && b === fin ? 'selected' : ''}>${a}:00 – ${b}:00</option>`).join('')}</select></label>
+      <label class="field"><span class="cal-lbl">Horario visible</span><select class="input" data-cal="horario" ${c.ampliado ? 'disabled title="Desmarca «Horario ampliado» para cambiarlo"' : ''}>${HORARIOS.map(([a, b]) => `<option value="${a}-${b}" ${a === ini && b === fin ? 'selected' : ''}>${a}:00 – ${b}:00</option>`).join('')}</select></label>
       <label class="check"><input type="checkbox" data-cal="finde" ${c.finde ? 'checked' : ''}>Mostrar fin de semana</label>
+      <label class="check"><input type="checkbox" data-cal="ampliado" ${c.ampliado ? 'checked' : ''}>Horario ampliado (7:00 – 24:00)</label>
     </section>
   </div>`;
 }
@@ -1524,8 +1528,8 @@ function vistaEditor() {
     ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
     ${n && n.estado !== 'activa' ? `<div class="banner"><span class="grow">Esta nota está ${n.estado === 'realizada' ? 'realizada' : 'en la papelera'}.</span><button class="btn small" data-act="ed-reabrir">Volver a pendiente</button></div>` : ''}`;
   const pie = n && n.estado === 'activa'
-    ? `${esMia(nota(e.id) || {}) ? '<button class="btn danger" data-act="ed-borrar">Eliminar</button>' : ''}<button class="btn" data-act="ed-hecha">Realizada</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`
-    : `<button class="btn" data-act="cerrar">Cancelar</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`;
+    ? `${esMia(nota(e.id) || {}) ? '<button class="btn danger" data-act="ed-borrar">Eliminar</button>' : ''}<button class="btn" data-act="ed-copiar" title="Crear otra nota igual">Copiar</button><button class="btn" data-act="ed-hecha">Realizada</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`
+    : `${n ? '<button class="btn" data-act="ed-copiar" title="Crear otra nota igual">Copiar</button>' : ''}<button class="btn" data-act="cerrar">Cancelar</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`;
   return pagina(e.id ? 'Editar nota' : 'Nueva nota', cuerpo, pie);
 }
 
@@ -2884,6 +2888,20 @@ const ACT = {
   },
   sug: (el) => elegirSug(Number(el.dataset.i)),
   'ed-guardar': () => guardarEditor(),
+  // Copiar: guarda lo que se estaba cambiando, crea una nota igual (pendiente, checklist sin marcar, sin fotos)
+  // y la abre para cambiar lo que haga falta.
+  'ed-copiar': () => {
+    const id = S.ed.id; guardarCambiosSilencio();
+    const n = nota(id); if (!n) return;
+    const copia = crearNotaLocal({
+      titulo: (n.titulo + ' (copia)').slice(0, 200), cuerpo: n.cuerpo || '', prioridad: n.prio_antes || n.prioridad, etiquetas: [...(n.etiquetas || [])],
+      ...conResp(respDe(n).map(r => ({ ...r }))), ...camposFecha({ ...n, repetir: n.repetir || '' }), duracion: n.duracion || null,
+      subir_critica: n.subir_critica !== 0 ? 1 : 0, checklist: (n.checklist || []).map(x => ({ t: x.t, hecho: false })), origen: 'manual',
+    });
+    S.ed = null;
+    location.hash = '#/nota/' + copia.id;
+    toast('Copia creada. Cambia lo que necesites y guarda.');
+  },
   'ed-hecha': () => { const id = S.ed.id; guardarCambiosSilencio(); S.ed = null; cerrar(); setTimeout(() => marcarRealizada(id), 50); },
   'ed-borrar': () => { const id = S.ed.id; S.ed = null; cerrar(); setTimeout(() => aPapelera(id), 50); },
   'ed-reabrir': () => { editarNotaLocal(S.ed.id, { estado: 'activa' }); renderOverlay(); renderBase(); toast('La nota vuelve a estar pendiente'); },

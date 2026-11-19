@@ -2,6 +2,10 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Hecho en la versión 1.8.1 (19 nov 2026)
+- Calendario: casilla «Horario ampliado (7:00 – 24:00)» en la barra lateral, junto a «Mostrar fin de semana». Preferencia de cada dispositivo (`S.ui.cal.ampliado`); no cambia el «Horario visible» habitual (`calHorarioBase`), que queda desactivado mientras está marcada.
+- Botón «Copiar» en la ficha de una nota (pendiente o realizada): crea una nota igual con «(copia)» en el título, pendiente, checklist sin marcar y sin fotos, y la abre para cambiarla.
+
 ## Hecho en la versión 1.8.0 (19 nov 2026)
 - Importar calendarios de Outlook (.ics) y **varios archivos a la vez** (CSV y .ics mezclados) en `#/importar`, con una sola revisión. Cada evento → nota: título, descripción (sin el bloque de Teams) y lugar, fecha y hora en hora de Madrid (zonas de Windows de Outlook, UTC y flotantes), duración, recordatorio → aviso previo (menos de 1 h no: ya avisa a la hora), repetición (laborables, semanal, quincenal, mensual; las demás, solo la próxima). Se omiten pasados, series acabadas, cancelados, cambios de una repetición y los ya importados (`origen: 'ics'`, `origen_ref: 'ics:UID'`). Cada tarjeta indica su archivo. Worker: acepta el origen `ics`. Pruebas en `test/ics.test.mjs` (carga el trozo «Importar calendario (.ics)» de app.js).
 
