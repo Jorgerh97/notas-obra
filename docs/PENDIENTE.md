@@ -2,7 +2,7 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
-## Hecho en la versión 1.8.0 (19 nov 2026), pendiente de publicar
+## Hecho en la versión 1.8.0 (19 nov 2026)
 - Importar calendarios de Outlook (.ics) y **varios archivos a la vez** (CSV y .ics mezclados) en `#/importar`, con una sola revisión. Cada evento → nota: título, descripción (sin el bloque de Teams) y lugar, fecha y hora en hora de Madrid (zonas de Windows de Outlook, UTC y flotantes), duración, recordatorio → aviso previo (menos de 1 h no: ya avisa a la hora), repetición (laborables, semanal, quincenal, mensual; las demás, solo la próxima). Se omiten pasados, series acabadas, cancelados, cambios de una repetición y los ya importados (`origen: 'ics'`, `origen_ref: 'ics:UID'`). Cada tarjeta indica su archivo. Worker: acepta el origen `ics`. Pruebas en `test/ics.test.mjs` (carga el trozo «Importar calendario (.ics)» de app.js).
 
 ## Versión multiusuario (fase 4), en la rama `fase4-multiusuario` — sin publicar en producción
