@@ -95,6 +95,8 @@ ok(JSON.stringify(b.checklist) === '["Bajante 1","Bajante 2"]' && JSON.stringify
 // Importación CSV: el origen se guarda
 r = await call('POST', '/notas', { id: 'nota_csv01', titulo: 'Importada', origen: 'csv', origen_ref: 'plantilla.csv' });
 ok(r.s === 200 && r.d.nota.origen === 'csv', 'nota importada desde CSV guarda su origen');
+r = await call('POST', '/notas', { id: 'nota_ics01', titulo: 'Desde Outlook', origen: 'ics', origen_ref: 'ics:evento-123@outlook' });
+ok(r.s === 200 && r.d.nota.origen === 'ics' && r.d.nota.origen_ref === 'ics:evento-123@outlook', 'nota importada de un calendario guarda su origen y el id del evento');
 
 // Checklists
 r = await call('POST', '/notas', { id: 'nota_check', titulo: 'Pedir oferta de carpintería', checklist: [{ t: 'Industrial 1', hecho: true }, { t: 'Industrial 2' }, 'Industrial 3', { t: '' }] });

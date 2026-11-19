@@ -2,6 +2,9 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Hecho en la versión 1.8.0 (19 nov 2026), pendiente de publicar
+- Importar calendarios de Outlook (.ics) y **varios archivos a la vez** (CSV y .ics mezclados) en `#/importar`, con una sola revisión. Cada evento → nota: título, descripción (sin el bloque de Teams) y lugar, fecha y hora en hora de Madrid (zonas de Windows de Outlook, UTC y flotantes), duración, recordatorio → aviso previo (menos de 1 h no: ya avisa a la hora), repetición (laborables, semanal, quincenal, mensual; las demás, solo la próxima). Se omiten pasados, series acabadas, cancelados, cambios de una repetición y los ya importados (`origen: 'ics'`, `origen_ref: 'ics:UID'`). Cada tarjeta indica su archivo. Worker: acepta el origen `ics`. Pruebas en `test/ics.test.mjs` (carga el trozo «Importar calendario (.ics)» de app.js).
+
 ## Versión multiusuario (fase 4), en la rama `fase4-multiusuario` — sin publicar en producción
 - Fase 0 (18 nov 2026): entorno `--env dev` (worker `notas-obra-dev`, D1 `notas-obra-dev-db`, R2 `notas-obra-fotos-dev`, sin cron), copia de producción fuera del repositorio y `test/migracion.test.mjs`.
 - Fase 1 (18 nov 2026), solo en el worker: tabla `usuarios` (token personal, solo se guarda su SHA-256), el `APP_TOKEN` es el usuario `yo` (administrador). Cada petición lleva su usuario (`env.U`) y todo se filtra por él: notas, etiquetas, personas, grupos, ajustes (tabla nueva `config_usuario`, con copia de los de `config`), dispositivos, archivos e historial (columna `usuario_id`, lo existente queda como `yo`). Rutas `GET /yo` y, solo para el administrador, `GET|POST /usuarios`, `PUT /usuarios/:id`, `POST /usuarios/:id/token`. Pruebas: `test/usuarios.test.mjs` y migración desde el esquema real de producción (`test/esquema-fase0.mjs`, sin datos).

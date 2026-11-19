@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.7.1';
+const VERSION = '1.8.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1748,7 +1748,7 @@ function vistaMenu() {
     <div><a class="btn link" href="#/revision" data-reemplazar>Revisión semanal</a></div>
     <div><a class="btn link" href="#/historial" data-reemplazar>Historial y papelera</a></div>
     ${S.usuario ? '<div><a class="btn link" href="#/registro" data-reemplazar>Tareas hechas compartidas</a></div>' : ''}
-    <div><a class="btn link" href="#/importar" data-reemplazar>Importar notas desde CSV</a></div>
+    <div><a class="btn link" href="#/importar" data-reemplazar>Importar notas (CSV o calendario)</a></div>
     <div><a class="btn link" href="#/ajustes" data-reemplazar>Ajustes</a></div>
     <div><button class="btn link" data-act="pdf-reunion">PDF para reunión</button></div>
     <div><button class="btn link" data-act="imprimir-lista">PDF de la lista actual</button></div>
@@ -1955,8 +1955,11 @@ function vistaRevisionDictado() {
   const incl = D.propuestas.filter(p => p.incluir).length;
   if (D.csv) {
     const malas = D.propuestas.filter(p => p.avisos.length).length;
+    const omit = D.csv.omitidos ? textoOmitidos(D.csv.omitidos) : '';
     const cuerpo = `<div class="banner"><span class="grow"><b>${D.propuestas.length === 1 ? 'Se ha leído 1 nota' : 'Se han leído ' + D.propuestas.length + ' notas'}</b> de «${esc(D.csv.nombre)}». Revisa y corrige antes de guardar.</span></div>
-      ${malas ? `<div class="banner warn"><span class="grow">${malas === 1 ? '1 fila tiene' : malas + ' filas tienen'} datos que no se han podido leer. Están marcadas en naranja.</span></div>` : ''}
+      ${omit ? `<div class="banner"><span class="grow">No se importan: ${esc(omit)}.</span></div>` : ''}
+      ${(D.csv.vacios || []).length ? `<div class="banner warn"><span class="grow">Sin notas nuevas en «${esc(D.csv.vacios.join('», «'))}».</span></div>` : ''}
+      ${malas ? `<div class="banner warn"><span class="grow">${malas === 1 ? '1 nota tiene' : malas + ' notas tienen'} datos que no se han podido leer. Están marcadas en naranja.</span></div>` : ''}
       ${D.csv.demas ? `<div class="banner warn"><span class="grow">Solo se importan ${CSV_MAX} filas cada vez; se han dejado fuera ${D.csv.demas}.</span></div>` : ''}
       ${D.propuestas.map((p, i) => tarjetaPropuesta(p, i)).join('')}
       <p class="hint">Las etiquetas y responsables en naranja no existen todavía. Solo se crean si pulsas Crear.</p>`;
@@ -1976,7 +1979,7 @@ function vistaRevisionDictado() {
 function tarjetaPropuesta(p, i) {
   const tags = p.etiquetas.map(etq).filter(Boolean);
   return `<article class="card propuesta p-${p.prioridad} ${p.incluir ? '' : 'off'}">
-    <div class="top"><span class="grow">${p.fila ? 'Fila ' + p.fila : 'Nota ' + (i + 1)}</span>
+    <div class="top"><span class="grow">${p.donde ? esc(p.donde) : p.fila ? 'Fila ' + p.fila : 'Nota ' + (i + 1)}</span>
       <select data-p="${i}" data-f="prioridad" aria-label="Prioridad">${PRIOS.map(x => `<option value="${x}" ${p.prioridad === x ? 'selected' : ''}>${PRIO_N[x]}</option>`).join('')}</select>
       <label class="check" style="min-height:36px"><input type="checkbox" data-p="${i}" data-f="incluir" ${p.incluir ? 'checked' : ''}>Incluir</label></div>
     <input class="input" data-p="${i}" data-f="titulo" value="${esc(p.titulo)}" aria-label="Título">
@@ -1985,6 +1988,7 @@ function tarjetaPropuesta(p, i) {
       ${p.nuevas.filter(n => n.decision === 'crear').map(n => `<span class="tag nueva">+ #${esc(n.nombre)}</span>`).join('')}
       <select class="input" data-p="${i}" data-f="add-tag" style="width:auto;min-height:34px;padding:0 6px" aria-label="Añadir etiqueta"><option value="">+ Etiqueta</option>${S.etiquetas.filter(e => !e.cerrada && !p.etiquetas.includes(e.id)).map(e => `<option value="${esc(e.id)}">#${esc(e.nombre)}</option>`).join('')}</select></div>
     ${(p.avisos || []).length ? `<div class="nueva-box"><div>⚠ ${p.avisos.map(esc).join(' · ')}</div></div>` : ''}
+    ${(p.info || []).length ? `<div class="hint">${p.info.map(esc).join(' · ')}</div>` : ''}
     ${p.personaNueva && !p.personaNueva.decision && !p.persona_id ? `<div class="nueva-box"><div>El responsable <b>${esc(p.personaNueva.nombre)}</b> no existe.</div>
       <div class="acts"><button class="btn small orange" data-act="p-per-nueva" data-p="${i}" data-v="crear">Crear ${esc(p.personaNueva.nombre)}</button>
       <button class="btn small link" data-act="p-per-nueva" data-p="${i}" data-v="descartar">Sin responsable</button></div></div>` : ''}
@@ -2032,7 +2036,7 @@ async function guardarDictado() {
     crearNotaLocal({
       titulo: p.titulo.trim() || (D.csv ? 'Nota importada' : 'Nota dictada'), cuerpo: p.cuerpo.trim(), prioridad: p.prioridad, etiquetas: [...new Set(ids)],
       persona_id: personaId, ...camposFecha(p), duracion: p.duracion || null, checklist: checklistGuardar(p),
-      ...(D.csv ? { origen: 'csv', origen_ref: D.csv.nombre } : { origen: 'voz', origen_ref: p.audio, transcripcion: p.transcripcion }),
+      ...(D.csv ? { origen: p.origen || 'csv', origen_ref: p.origen_ref || D.csv.nombre } : { origen: 'voz', origen_ref: p.audio, transcripcion: p.transcripcion }),
     });
     if (p.audio) audios.add(p.audio);
     n++;
@@ -2175,30 +2179,198 @@ function propuestasCsv(filas) {
   });
   return out;
 }
-async function importarCsv(file) {
-  if (!file) return;
-  if (S.dic && S.dic.fase === 'revision' && !S.dic.csv && !confirm('Tienes un dictado sin guardar. Si importas el CSV, se descartarán esas notas propuestas. ¿Seguir?')) return;
-  try {
-    const buf = await file.arrayBuffer();
-    let texto;
-    try { texto = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { texto = new TextDecoder('windows-1252').decode(buf); }
-    const filas = leerCsv(texto);
-    const propuestas = propuestasCsv(filas);
-    if (!propuestas.length) { toast('No se ha encontrado ninguna nota en el archivo. Comprueba que tiene la columna Título.'); return; }
-    S.dic = { fase: 'revision', propuestas, msg: '', segs: 0, csv: { nombre: file.name.slice(0, 120), demas: Math.max(0, filas.length - 1 - CSV_MAX) } };
-    if (ruta() === 'importar') renderOverlay(); else location.hash = '#/importar';
-  } catch (e) { toast('No se ha podido leer el archivo: ' + e.message); }
+// ---------- Importar calendario (.ics) ----------
+// Eventos de Outlook (también Google o Apple Calendar) → notas propuestas, con la misma revisión que el CSV.
+// Se importan los eventos de hoy en adelante y las series que siguen vivas; los pasados y cancelados se omiten.
+// Zonas horarias de Windows que usa Outlook → nombres que entiende el navegador.
+const ICS_ZONAS = { 'romance standard time': 'Europe/Paris', 'w. europe standard time': 'Europe/Berlin', 'central european standard time': 'Europe/Warsaw',
+  'central europe standard time': 'Europe/Budapest', 'gmt standard time': 'Europe/London', 'utc': 'UTC', 'coordinated universal time': 'UTC' };
+// Lee un archivo .ics: [{ SUMMARY: { valor, params }, ..., alarmas: [{ valor, params }] }] (un objeto por VEVENT).
+function leerIcs(texto) {
+  // Una línea que empieza por espacio o tabulador continúa la anterior (RFC 5545).
+  const lineas = texto.replace(/^﻿/, '').replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');
+  const eventos = [];
+  let ev = null, enAlarma = false;
+  for (const l of lineas) {
+    let i = -1, comillas = false;
+    for (let j = 0; j < l.length; j++) { if (l[j] === '"') comillas = !comillas; else if (l[j] === ':' && !comillas) { i = j; break; } }
+    if (i < 0) continue;
+    const [nombre, ...ps] = l.slice(0, i).split(';'), valor = l.slice(i + 1), N = nombre.toUpperCase(), V = valor.trim().toUpperCase();
+    const params = Object.fromEntries(ps.map(x => { const j = x.indexOf('='); return [x.slice(0, j).toUpperCase(), x.slice(j + 1).replace(/^"|"$/g, '')]; }));
+    if (N === 'BEGIN' && V === 'VEVENT') { ev = { alarmas: [] }; continue; }
+    if (N === 'END' && V === 'VEVENT') { if (ev) eventos.push(ev); ev = null; enAlarma = false; continue; }
+    if (!ev) continue;
+    if (N === 'BEGIN' && V === 'VALARM') { enAlarma = true; continue; }
+    if (N === 'END' && V === 'VALARM') { enAlarma = false; continue; }
+    if (enAlarma) { if (N === 'TRIGGER') ev.alarmas.push({ valor: valor.trim(), params }); continue; }
+    if (!(N in ev)) ev[N] = { valor, params };
+  }
+  return eventos;
+}
+const icsTexto = v => String(v || '').replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, '$1').trim();
+function partesZona(ms, tz) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    .formatToParts(new Date(ms)).map(x => [x.type, x.value]));
+  return { fecha: `${p.year}-${p.month}-${p.day}`, hora: `${p.hour}:${p.minute}` };
+}
+// Hora «de reloj» en una zona → instante UTC (dos pasadas, por los cambios de hora).
+function enZonaAUtc(y, mo, d, h, mi, tz) {
+  const local = Date.UTC(y, mo - 1, d, h, mi);
+  const desfase = t => { const p = partesZona(t, tz); return Date.parse(p.fecha + 'T' + p.hora + ':00Z') - Math.floor(t / 60000) * 60000; };
+  return local - desfase(local - desfase(local));
+}
+// DTSTART / DTEND / UNTIL → { fecha, hora ('' si es todo el día), ms } en hora de Madrid.
+function icsFecha(campo) {
+  if (!campo) return null;
+  const v = campo.valor.trim(), m = v.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/);
+  if (!m) return { error: `fecha «${v}» no válida` };
+  const [, y, mo, d, h, mi, , z] = m;
+  if (!h || (campo.params.VALUE || '').toUpperCase() === 'DATE') return { fecha: `${y}-${mo}-${d}`, hora: '', ms: Date.UTC(+y, mo - 1, +d) };
+  let ms, aviso = '';
+  const tzid = campo.params.TZID;
+  if (z) ms = Date.UTC(+y, mo - 1, +d, +h, +mi);
+  else if (!tzid) return { fecha: `${y}-${mo}-${d}`, hora: `${h}:${mi}`, ms: Date.UTC(+y, mo - 1, +d, +h, +mi) };   // hora «flotante»
+  else {
+    try { ms = enZonaAUtc(+y, +mo, +d, +h, +mi, ICS_ZONAS[tzid.toLowerCase()] || tzid); }
+    catch { return { fecha: `${y}-${mo}-${d}`, hora: `${h}:${mi}`, ms: Date.UTC(+y, mo - 1, +d, +h, +mi), aviso: `zona horaria «${tzid}» desconocida: se ha tomado la hora tal cual` }; }
+  }
+  const p = partesZona(ms, 'Europe/Madrid');
+  return { fecha: p.fecha, hora: p.hora, ms, aviso };
+}
+// Duración ISO («-PT15M», «P1D», «PT1H30M») → minutos (negativo si es antes).
+function icsMinutos(v) {
+  const m = String(v || '').trim().match(/^([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/);
+  if (!m) return null;
+  const min = (+m[2] || 0) * 10080 + (+m[3] || 0) * 1440 + (+m[4] || 0) * 60 + (+m[5] || 0);
+  return m[1] === '-' ? -min : min;
+}
+// Recordatorio de Outlook → aviso previo de la app (1-12 horas, 1-7 días o 1-4 semanas antes).
+function icsAviso(alarmas) {
+  const a = alarmas.find(x => (x.params.RELATED || 'START').toUpperCase() === 'START' && icsMinutos(x.valor) != null && icsMinutos(x.valor) < 0);
+  if (!a) return { u: '', c: 0 };
+  const min = -icsMinutos(a.valor);
+  if (min < 60) return { u: '', c: 0, info: `recordatorio de ${min} min: la app ya avisa a la hora del evento` };
+  if (min <= 12 * 60) return { u: 'h', c: Math.round(min / 60) };
+  if (min < 7 * 1440) return { u: 'd', c: Math.min(Math.max(Math.round(min / 1440), 1), 7) };
+  return { u: 's', c: Math.min(Math.max(Math.round(min / 10080), 1), 4) };
+}
+// Regla de repetición → repetir de la app. Lo que no encaja se importa como evento único.
+function icsRepetir(v) {
+  if (!v) return { v: '' };
+  const r = Object.fromEntries(String(v.valor).split(';').map(x => x.split('=')).map(([k, x]) => [String(k).toUpperCase(), String(x || '').toUpperCase()]));
+  const intervalo = +(r.INTERVAL || 1), dias = (r.BYDAY || '').split(',').filter(Boolean);
+  const laborables = dias.length === 5 && ['MO', 'TU', 'WE', 'TH', 'FR'].every(d => dias.includes(d));
+  let rep = '';
+  if (r.FREQ === 'DAILY' && intervalo === 1 && (laborables || !dias.length)) rep = laborables ? 'laborables' : '';
+  else if (r.FREQ === 'WEEKLY' && laborables && intervalo === 1) rep = 'laborables';
+  else if (r.FREQ === 'WEEKLY' && dias.length <= 1 && intervalo <= 2) rep = intervalo === 2 ? 'quincenal' : 'semanal';
+  else if (r.FREQ === 'MONTHLY' && intervalo === 1 && !r.BYSETPOS && !/\d[A-Z]{2}$/.test(r.BYDAY || '')) rep = 'mensual';
+  return { v: rep, until: r.UNTIL ? icsFecha({ valor: r.UNTIL, params: {} }) : null,
+    info: rep ? '' : 'se repite de una forma que la app no admite: se importa solo la próxima vez' };
+}
+// Eventos → notas propuestas. Devuelve { propuestas, omitidos: { pasados, cancelados, importados, cambios } }.
+function propuestasIcs(texto, archivo) {
+  const hoy = hoyYmd(), out = [], omitidos = { pasados: 0, cancelados: 0, importados: 0, cambios: 0 };
+  const yaHay = new Set(S.notas.filter(n => n.origen === 'ics' && n.estado !== 'papelera').map(n => n.origen_ref));
+  for (const ev of leerIcs(texto)) {
+    if (ev['RECURRENCE-ID']) { omitidos.cambios++; continue; }   // cambios de una sola repetición de una serie
+    if ((ev.STATUS && ev.STATUS.valor.trim().toUpperCase() === 'CANCELLED') || /^(cancelad[oa]|canceled|cancelled)\s*:/i.test(icsTexto(ev.SUMMARY && ev.SUMMARY.valor))) { omitidos.cancelados++; continue; }
+    const ini = icsFecha(ev.DTSTART);
+    if (!ini || ini.error) continue;
+    const rep = icsRepetir(ev.RRULE), avisos = [], info = [];
+    let fecha = ini.fecha;
+    if (rep.v && fecha < hoy) {
+      if (rep.until && rep.until.fecha < hoy) { omitidos.pasados++; continue; }   // la serie ya terminó
+      do fecha = fechaSiguiente(fecha, rep.v); while (fecha < hoy);
+      info.push('se repite: la próxima es el ' + fecha.split('-').reverse().join('/'));
+    } else if (fecha < hoy) { omitidos.pasados++; continue; }
+    const ref = 'ics:' + String((ev.UID && ev.UID.valor) || '').trim().slice(0, 190);
+    if (ref !== 'ics:' && yaHay.has(ref)) { omitidos.importados++; continue; }
+    if (ref !== 'ics:') yaHay.add(ref);   // el mismo evento en dos archivos
+    if (ini.aviso) avisos.push(ini.aviso);
+    if (rep.info) info.push(rep.info);
+    const fin = ev.DTEND ? icsFecha(ev.DTEND) : null, durIso = ev.DURATION ? icsMinutos(ev.DURATION.valor) : null;
+    const dur = ini.hora ? (fin && !fin.error && fin.ms ? Math.round((fin.ms - ini.ms) / 60000) : durIso) : null;
+    const av = icsAviso(ev.alarmas);   // sin hora (todo el día), el aviso previo suena a las 8:00
+    if (av.info) info.push(av.info);
+    // La descripción de Outlook suele terminar con el bloque de Teams («________ Reunión de Microsoft Teams…»): se quita.
+    let cuerpo = icsTexto(ev.DESCRIPTION && ev.DESCRIPTION.valor).split(/\n?_{10,}/)[0].replace(/\n{3,}/g, '\n\n').trim().slice(0, 2000);
+    const lugar = icsTexto(ev.LOCATION && ev.LOCATION.valor);
+    if (lugar && !/^https?:\/\//i.test(lugar) && !/microsoft teams/i.test(lugar)) cuerpo = ('Lugar: ' + lugar + (cuerpo ? '\n' + cuerpo : '')).slice(0, 2000);
+    const titulo = icsTexto(ev.SUMMARY && ev.SUMMARY.valor).slice(0, 200) || 'Evento sin título';
+    out.push({
+      k: uid(), incluir: true, fila: 0, donde: archivo + ' · ' + fecha.split('-').reverse().join('/') + (ini.hora ? ' ' + ini.hora : ''),
+      avisos, info, audio: null, transcripcion: '', titulo, cuerpo, prioridad: 'normal', etiquetas: [], evidencias: [], nuevas: [],
+      persona_id: '', personaNueva: null, fecha_limite: fecha, hora_limite: ini.hora, aviso_unidad: av.u, aviso_cant: av.c,
+      duracion: dur > 0 && dur <= 1440 ? dur : DURACION_DEF, durDefecto: !(dur > 0 && dur <= 1440), checklist: [], repetir: rep.v,
+      origen: 'ics', origen_ref: ref !== 'ics:' ? ref : null, orden: fecha + ' ' + (ini.hora || '00:00'),
+    });
+  }
+  out.sort((a, b) => a.orden.localeCompare(b.orden));
+  return { propuestas: out, omitidos };
+}
+// ---------- fin calendario ----------
+
+// Varios archivos a la vez, CSV y calendario (.ics) mezclados: todas las notas pasan por una sola revisión.
+async function importarArchivos(files) {
+  files = [...(files || [])];
+  if (!files.length) return;
+  if (S.dic && S.dic.fase === 'revision' && !S.dic.csv && !confirm('Tienes un dictado sin guardar. Si importas, se descartarán esas notas propuestas. ¿Seguir?')) return;
+  const propuestas = [], nombres = [], vacios = [], omitidos = { pasados: 0, cancelados: 0, importados: 0, cambios: 0 };
+  let demas = 0;
+  for (const file of files) {
+    try {
+      const buf = await file.arrayBuffer();
+      let texto;
+      try { texto = new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { texto = new TextDecoder('windows-1252').decode(buf); }
+      const nombre = file.name.slice(0, 120);
+      let ps;
+      if (/^\ufeff?\s*BEGIN:VCALENDAR/i.test(texto) || /\.ics$/i.test(nombre)) {
+        const r = propuestasIcs(texto, nombre);
+        ps = r.propuestas;
+        for (const k in omitidos) omitidos[k] += r.omitidos[k];
+      } else {
+        const filas = leerCsv(texto);
+        ps = propuestasCsv(filas).map(p => ({ ...p, donde: nombre + ' · fila ' + p.fila, origen: 'csv', origen_ref: nombre }));
+        demas += Math.max(0, filas.length - 1 - CSV_MAX);
+      }
+      nombres.push(nombre);
+      if (!ps.length) vacios.push(nombre);
+      propuestas.push(...ps);
+    } catch (e) { toast('No se ha podido leer «' + file.name + '»: ' + e.message); }
+  }
+  if (propuestas.length > CSV_MAX) { demas += propuestas.length - CSV_MAX; propuestas.length = CSV_MAX; }
+  const omit = Object.values(omitidos).reduce((a, b) => a + b, 0);
+  if (!propuestas.length) {
+    toast(omit ? 'No hay notas nuevas que importar: ' + textoOmitidos(omitidos) + '.' : 'No se ha encontrado ninguna nota. Un CSV necesita la columna Título; un calendario, eventos.');
+    return;
+  }
+  S.dic = { fase: 'revision', propuestas, msg: '', segs: 0, csv: { nombre: nombres.join('», «'), varios: nombres.length > 1, demas, vacios, omitidos } };
+  if (ruta() === 'importar') renderOverlay(); else location.hash = '#/importar';
+}
+const importarCsv = file => importarArchivos(file ? [file] : []);
+function textoOmitidos(o) {
+  return [[o.pasados, 'evento pasado', 'eventos pasados'], [o.cancelados, 'cancelado', 'cancelados'], [o.importados, 'ya importado', 'ya importados'],
+    [o.cambios, 'cambio de una repetición', 'cambios de repeticiones']].filter(([n]) => n).map(([n, uno, varios]) => n + ' ' + (n === 1 ? uno : varios)).join(', ');
 }
 function vistaImportar() {
-  const cuerpo = `<section class="card"><h2>Importar notas desde un CSV</h2>
+  const cuerpo = `<section class="card"><h2>Importar notas</h2>
+      <p>Puedes elegir <b>varios archivos a la vez</b>: hojas en <b>CSV</b> y calendarios de Outlook (<b>.ics</b>). Todas las notas salen juntas para revisarlas antes de guardar.</p>
+      <div class="row"><label class="btn primary">Elegir archivos (CSV o .ics)<input type="file" multiple accept=".csv,.ics,text/csv,text/calendar,text/plain" data-csv hidden></label></div></section>
+    <section class="card"><h2>Calendario de Outlook (.ics)</h2>
+      <p>Cada evento pasa a ser una nota: título, descripción y lugar; fecha límite y hora del evento; duración; recordatorio como aviso previo; y si se repite (cada día laborable, semanal, cada dos semanas o mensual).</p>
+      <ol class="hint" style="margin:0;padding-left:18px">
+        <li>En Outlook (web): Calendario → Configuración → Calendarios compartidos → Publicar calendario, y descarga el enlace ICS. O abre un evento recibido por correo y guarda el archivo adjunto .ics.</li>
+        <li>En Outlook de escritorio: Archivo → Guardar calendario.</li>
+        <li>Pulsa «Elegir archivos». Solo se importan los eventos de hoy en adelante; los ya importados se saltan.</li></ol></section>
+    <section class="card"><h2>Hoja de cálculo (CSV)</h2>
       <p>Prepara las notas en Excel, una por fila, y guarda el archivo como <b>CSV</b>. Antes de guardarlas podrás revisarlas una a una.</p>
       <ol class="hint" style="margin:0;padding-left:18px">
         <li>Descarga la plantilla y ábrela con Excel.</li>
         <li>Rellena una fila por nota. Solo el <b>Título</b> es obligatorio.</li>
         <li>Guárdala como «CSV UTF-8» o «CSV (delimitado por comas)».</li>
-        <li>Pulsa «Elegir archivo CSV».</li></ol>
-      <div class="row"><button class="btn" data-act="csv-plantilla">Descargar plantilla</button>
-        <label class="btn primary">Elegir archivo CSV<input type="file" accept=".csv,text/csv,text/plain" data-csv hidden></label></div></section>
+        <li>Pulsa «Elegir archivos».</li></ol>
+      <div class="row"><button class="btn" data-act="csv-plantilla">Descargar plantilla</button></div></section>
     <section class="card"><h2>Columnas</h2><div class="list-plain">
       <div><span class="grow"><b>Título</b><small>Obligatorio</small></span></div>
       <div><span class="grow"><b>Descripción</b><small>Texto libre</small></span></div>
@@ -2451,8 +2623,8 @@ function vistaAjustes() {
   </section>
 
   <section class="card"><h2>Importar notas</h2>
-    <p class="hint">Añade muchas notas de golpe desde un archivo CSV hecho con Excel.</p>
-    <div class="row"><a class="btn" href="#/importar">Importar desde CSV</a><button class="btn link" data-act="csv-plantilla">Descargar plantilla</button></div>
+    <p class="hint">Añade muchas notas de golpe desde archivos CSV hechos con Excel o calendarios de Outlook (.ics), varios a la vez.</p>
+    <div class="row"><a class="btn" href="#/importar">Importar notas</a><button class="btn link" data-act="csv-plantilla">Descargar plantilla</button></div>
   </section>
   <section class="card"><h2>Copia de seguridad</h2>
     <p class="hint">Descarga todas tus notas, etiquetas, personas y grupos en un archivo.</p>
@@ -2970,7 +3142,7 @@ document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.dataset.ed && S.ed && t.type === 'checkbox') S.ed.d[t.dataset.ed] = t.checked;
   if (t.dataset.p != null && S.dic && (t.dataset.f === 'add-tag' || t.dataset.f === 'incluir')) return;
-  if (t.matches('[data-csv]')) { const f = t.files[0]; t.value = ''; importarCsv(f); return; }
+  if (t.matches('[data-csv]')) { const fs = [...t.files]; t.value = ''; importarArchivos(fs); return; }
   if (t.dataset.fotos) { const files = [...t.files]; t.value = ''; anadirFotos(t.dataset.fotos, files); return; }
   if (t.matches('[data-grupo-vista]')) { aplicarVista(t.value); return; }
   if (t.dataset.reg && S.reg) { S.reg.f[t.dataset.reg] = t.value; renderOverlay(); return; }
