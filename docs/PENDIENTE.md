@@ -2,6 +2,9 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Hecho en la versión 1.8.2 (20 nov 2026)
+- Arrastrar una nota (Lista, Calendario o Matriz, en ordenador) sobre un grupo filtrado de la barra lateral le aplica los filtros del grupo, **solo añadiendo**: las etiquetas que le faltan (en modo «alguna», la primera si no tiene ninguna; las que ya tenía se conservan), la prioridad si no es una de las del grupo (la más alta de las del grupo) y un responsable del grupo si no tiene ninguno de ellos. «Con avisos», «Vencen esta semana» y «Sin tocar» no se pueden aplicar y se avisa. Con «Deshacer». Código: `cambiosParaGrupo`, `soltarEnGrupo`, `aplicarGrupoNota` (destino `grupo` de `SOLTAR`).
+
 ## Hecho en la versión 1.8.1 (19 nov 2026)
 - Calendario: casilla «Horario ampliado (7:00 – 24:00)» en la barra lateral, junto a «Mostrar fin de semana». Preferencia de cada dispositivo (`S.ui.cal.ampliado`); no cambia el «Horario visible» habitual (`calHorarioBase`), que queda desactivado mientras está marcada.
 - Botón «Copiar» en la ficha de una nota (pendiente o realizada): crea una nota igual con «(copia)» en el título, pendiente, checklist sin marcar y sin fotos, y la abre para cambiarla.

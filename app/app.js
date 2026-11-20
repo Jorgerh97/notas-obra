@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.8.1';
+const VERSION = '1.8.2';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -1192,7 +1192,9 @@ const SOLTAR = {
     return { texto: `Al soltar: «${n.titulo}» se asigna a ${nombreClave(k)}`, hacer: () => asignarNota(n.id, k) };
   },
   // Ordenar los grupos de la barra lateral: se coloca encima o debajo según la mitad donde se suelte.
+  // Si lo que se arrastra es una nota, se le aplican los filtros de ese grupo (soltarEnGrupo).
   grupo: (st, d) => {
+    if (st.tipo !== 'grupo') return soltarEnGrupo(st, d);
     const ids = S.vistas.map(v => v.id), de = ids.indexOf(st.id), a = ids.indexOf(d.dataset.id);
     if (de < 0 || a < 0 || de === a) return null;
     const r = d.getBoundingClientRect(), debajo = st.y > r.top + r.height / 2;
@@ -1203,6 +1205,52 @@ const SOLTAR = {
       hacer: () => ordenarGrupos(orden) };
   },
 };
+// Soltar una nota sobre un grupo filtrado: solo se AÑADE lo que le falta para entrar en el grupo
+// (etiquetas, prioridad, responsable). Lo que ya tenía la nota se conserva.
+function cambiosParaGrupo(n, v) {
+  const f = { ...filtroVacio(), ...(v.filtro || {}) }, cambios = {}, partes = [], omitidos = [];
+  const tiene = n.etiquetas || [], validas = f.etiquetas.filter(id => etq(id));
+  const nuevas = f.modo === 'alguna'
+    ? (validas.some(id => tiene.includes(id)) ? [] : validas.slice(0, 1))   // «alguna»: basta con una
+    : validas.filter(id => !tiene.includes(id));
+  if (nuevas.length) { cambios.etiquetas = [...tiene, ...nuevas]; partes.push(nuevas.map(id => '#' + etq(id).nombre).join(' ')); }
+  if (f.prioridades.length && !f.prioridades.includes(n.prioridad)) {
+    const p = PRIOS.find(x => f.prioridades.includes(x));
+    cambios.prioridad = p; partes.push(PRIO_N[p]);
+    if (n.prioridad === 'critica' && n.subir_critica !== 0) cambios.subir_critica = 0;
+  }
+  if (f.personas.length) {
+    const ks = respClaves(n);
+    if (!ks.some(k => f.personas.includes(k))) {
+      const k = f.personas.find(x => x !== 'ninguna' && x !== 'u:' + (n.usuario_id || yoId()) && (x.startsWith('u:') || per(x)));
+      if (k) { Object.assign(cambios, conResp([...respDe(n).map(r => ({ ...r })), respDeClave(k)])); partes.push(nombreClave(k)); }
+      else if (!(f.personas.includes('ninguna') && !ks.length)) omitidos.push('responsable');
+    }
+  }
+  if (f.conAlarma && !(n.alarma || n.hora_limite || n.aviso_unidad)) omitidos.push('con avisos');
+  if (f.venceSemana) { const fe = fechaEfectiva(n); if (!fe || fe > finSemana()) omitidos.push('vence esta semana'); }
+  if (f.estancadas && !estancada(n)) omitidos.push('sin tocar 10+ días');
+  return { cambios, partes, omitidos };
+}
+function soltarEnGrupo(st, d) {
+  const n = nota(st.id), v = S.vistas.find(x => x.id === d.dataset.id);
+  if (!n || !v) return null;
+  const { cambios, partes, omitidos } = cambiosParaGrupo(n, v);
+  if (!partes.length) return null;
+  return { texto: `Al soltar: «${n.titulo}» → «${v.nombre}»: añade ${partes.join(', ')}`, hacer: () => aplicarGrupoNota(n.id, v, cambios, partes, omitidos) };
+}
+function aplicarGrupoNota(id, v, cambios, partes, omitidos) {
+  const n = nota(id); if (!n) return;
+  const antes = {};
+  if ('etiquetas' in cambios) antes.etiquetas = [...(n.etiquetas || [])];
+  if ('prioridad' in cambios) antes.prioridad = n.prioridad;
+  if ('subir_critica' in cambios) antes.subir_critica = n.subir_critica;
+  if ('responsables' in cambios) Object.assign(antes, conResp(respDe(n).map(r => ({ ...r }))));
+  editarNotaLocal(id, cambios);
+  renderBase();
+  toast(`«${n.titulo}» añadida a «${v.nombre}»: ${partes.join(', ')}${omitidos.length ? ' (no se aplica: ' + omitidos.join(', ') + ')' : ''}`,
+    { deshacer: () => { editarNotaLocal(id, antes); renderBase(); } });
+}
 function asignarNota(id, clave) {
   const n = nota(id); if (!n) return;
   const antes = respDe(n).map(r => ({ ...r }));
@@ -1287,7 +1335,7 @@ function empezarArrastre(st) {
 function moverArrastre(st) {
   st.ghost.style.transform = `translate(${st.x + 12}px, ${st.y - 18}px) rotate(-1.5deg)`;
   // Las notas (de cualquier vista) también se pueden soltar sobre un responsable de la barra lateral.
-  const sel = st.tipo === 'grupo' ? '[data-drop="grupo"]' : `[data-drop="${st.tipo}"], [data-drop="per"]`;
+  const sel = st.tipo === 'grupo' ? '[data-drop="grupo"]' : `[data-drop="${st.tipo}"], [data-drop="per"], [data-drop="grupo"]`;
   const destino = (document.elementFromPoint(st.x, st.y) || document.body).closest(sel);
   const res = destino ? SOLTAR[destino.dataset.drop](st, destino) : null;
   if (destino !== st.destino) { quitarMarca(st); st.destino = destino; }
@@ -1305,7 +1353,7 @@ function moverArrastre(st) {
     } else if (hueco) hueco.remove();
   }
   st.info.textContent = res ? res.texto : destino ? 'Ya está aquí'
-    : { cal: 'Suelta en un día, en una hora o sobre un responsable', lista: 'Suelta sobre un responsable de la izquierda', grupo: 'Suelta encima o debajo de otro grupo' }[st.tipo] || 'Suelta sobre otro bloque o sobre un responsable';
+    : { cal: 'Suelta en un día, en una hora, sobre un grupo o sobre un responsable', lista: 'Suelta sobre un grupo o un responsable de la izquierda', grupo: 'Suelta encima o debajo de otro grupo' }[st.tipo] || 'Suelta sobre otro bloque o sobre un responsable';
 }
 function quitarMarca(st) {
   if (!st.destino) return;
