@@ -67,7 +67,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.4.0** (8 oct 2026): grupos y «Responsables» (personas) en la barra lateral para los tres modos, arrastrar notas a un responsable, ordenar grupos arrastrando, casilla de realizada en el calendario, cerrar ventanas pulsando fuera, calendario más legible y mejor hora por voz → `docs/PENDIENTE.md`.
 - **1.4.1** (13 oct 2026): arreglo de casillas y «+ Foto» dentro de las ventanas. **1.5.0** (13 oct 2026): importar notas desde CSV (`#/importar`) → `docs/PENDIENTE.md`.
 - **1.5.1** (6 nov 2026): al abrir una nota nueva, el cursor queda en el título → `docs/PENDIENTE.md`.
-- **1.5.2** (18 nov 2026): fecha vencida como «12 nov» y descripción con prioridad en tablet (Lista y Matriz) → `docs/PENDIENTE.md`. Descripción y arquitectura para la versión multiusuario en `docs/ARQUITECTURA.md`.
+- **1.5.2** (18 nov 2026): fecha vencida como «12 nov» y descripción con prioridad en tablet (Lista y Matriz) → `docs/PENDIENTE.md`. Descripción completa de la app para consultas en otro chat: `docs/ARQUITECTURA.md` (mantenerla al día en cada versión).
 - **1.5.3** (18 nov 2026): fechas «26/11 17:30», etiquetas y fecha más estrechas en Lista y Matriz, iconos junto al título → `docs/PENDIENTE.md`.
 - **1.7.1 multiusuario** (18 nov 2026, en producción): fases 0 a 3 (entorno dev, usuarios y token, permiso de dictado, notas compartidas, registro, barra lateral con usuarios, traspaso de persona a usuario) → `docs/PENDIENTE.md` y `docs/PASO-PRODUCCION.md`. Para volver atrás: etiqueta local `v1.5.3` y worker `79c96957-ff07-40f5-ad15-5d131b10aa1e`.
 - **1.8.0** (19 nov 2026): importar calendarios de Outlook (.ics) y varios archivos a la vez → `docs/PENDIENTE.md`.
