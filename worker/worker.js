@@ -939,6 +939,8 @@ async function analizar(env, b) {
 // respuesta solo confirma lo creado y avisa de las etiquetas o responsables que no existen (no se crean).
 const MCP_VERSIONES = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const MCP_MAX_NOTAS = 20;
+// Frases con las que el usuario pide crear notas (Jorge: «apunta», «toma nota», «crea la nota / las notas»).
+const FRASES_MCP = 'Úsala directamente, sin pedir confirmación, cuando el mensaje empiece o incluya frases como «apunta», «anota», «toma nota», «tomar nota», «crea una nota», «crea la nota», «crea las notas», «nueva nota», «nota para…» o «recuérdame»: todo lo que siga es el contenido de las notas.';
 const PRIO_MCP = { urgente: 'critica', critica: 'critica', alta: 'alta', normal: 'normal', baja: 'baja' };
 const AVISO_MCP = { horas: 'h', hora: 'h', h: 'h', dias: 'd', dia: 'd', d: 'd', semanas: 's', semana: 's', s: 's' };
 
@@ -970,6 +972,7 @@ function herramientaMcp(ahora = Date.now()) {
     name: 'crear_notas',
     title: 'Crear notas en Notas de obra',
     description: `Crea una o varias notas (tareas) en la app «Notas de obra» de un jefe de obra. Solo crea notas: no puede leer, buscar, cambiar ni borrar nada.
+${FRASES_MCP}
 Hoy es ${dia} ${p.fecha} y son las ${p.hora} (hora de Madrid). Calcula las fechas relativas («mañana», «el jueves») a partir de aquí.
 Reglas: una nota por asunto independiente. titulo corto (máximo 8 palabras), empezando por un verbo si es una acción. descripcion: los detalles útiles, sin inventar.
 prioridad: urgente (seguridad, paralización, hormigonados o plazos de hoy o mañana), alta, normal (por defecto) o baja.
@@ -1097,7 +1100,7 @@ async function atenderMcp(request, env, clave) {
         const pedida = m.params && m.params.protocolVersion;
         return ok({ protocolVersion: MCP_VERSIONES.includes(pedida) ? pedida : MCP_VERSIONES[1], capabilities: { tools: {} },
           serverInfo: { name: 'notas-obra', title: 'Notas de obra', version: '1.9.0' },
-          instructions: 'Usa crear_notas cuando el usuario dicte o pida apuntar tareas o notas de obra. Este conector no puede leer notas.' });
+          instructions: 'Usa crear_notas para guardar en Notas de obra lo que el usuario dicte. ' + FRASES_MCP + ' Este conector no puede leer notas.' });
       }
       case 'ping': return ok({});
       case 'tools/list': return ok({ tools: [herramientaMcp()] });

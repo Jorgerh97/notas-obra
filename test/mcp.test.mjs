@@ -53,6 +53,7 @@ r = await mcp(ruta, 'tools/list');
 const tools = r.d.result.tools;
 ok(tools.length === 1 && tools[0].name === 'crear_notas', 'solo hay una herramienta: crear_notas');
 ok(/Hoy es \S+ \d{4}-\d{2}-\d{2}/.test(tools[0].description), 'la herramienta indica la fecha de hoy');
+ok(['apunta', 'toma nota', 'crea la nota', 'crea las notas'].every(f => tools[0].description.includes(f)), 'la herramienta indica las frases que la activan');
 ok(!JSON.stringify(tools).includes('Mallorca245') && !JSON.stringify(tools).includes('Pere'), 'la lista de herramientas no revela etiquetas ni personas');
 r = await mcp(ruta, 'tools/call', { name: 'leer_notas', arguments: {} });
 ok(r.d.error && r.d.error.code === -32602, 'cualquier otra herramienta se rechaza');
