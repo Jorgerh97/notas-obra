@@ -939,6 +939,10 @@ async function analizar(env, b) {
 // respuesta solo confirma lo creado y avisa de las etiquetas o responsables que no existen (no se crean).
 const MCP_VERSIONES = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const MCP_MAX_NOTAS = 20;
+// Contexto del trabajo, para entender el dictado y corregir lo que se oye mal (sin datos reales: el repositorio es público).
+const CONTEXTO_MCP = `Contexto: quien dicta es jefe de obra de una empresa constructora (contratista) en Barcelona; dicta a menudo desde la obra, con ruido y deprisa. Las notas son tareas de su trabajo: obras de edificación, subcontratas e industriales (gremios: estructura, albañilería, fontanería, electricidad, climatización, carpintería, pintura, ascensores…), proveedores y suministros, la dirección facultativa (DF, arquitecto, aparejador o director de ejecución), la propiedad o el cliente, el coordinador de seguridad y salud, el encargado y el jefe de producción.
+Vocabulario habitual: replanteo, encofrado, ferralla, forjado, hormigonado, cimentación, estructura, cerramientos, fachada, cubierta, impermeabilización, tabiquería, pladur, instalaciones, acabados, repasos, grúa, andamio, línea de vida, PRL, planning, partida, medición, certificación, presupuesto, contradictorio, precio nuevo, oferta, comparativo, pedido, contrato, albarán, factura, acta de visita, libro de órdenes, libro de subcontratación, licencia, ayuntamiento, recepción.
+Si una palabra no encaja, interprétala con este contexto y corrige los errores evidentes de dictado («for jado» → forjado, «ferralla» mal oída, nombres de gremios). Puede haber nombres de obras, calles o empresas en catalán: respétalos. No inventes datos que no se hayan dicho; si algo sigue siendo dudoso, crea la nota con lo que esté claro y añade la duda en la descripción.`;
 // Frases con las que el usuario pide crear notas (Jorge: «apunta», «toma nota», «crea la nota / las notas»).
 const FRASES_MCP = 'Úsala directamente, sin pedir confirmación, cuando el mensaje empiece o incluya frases como «apunta», «anota», «toma nota», «tomar nota», «crea una nota», «crea la nota», «crea las notas», «nueva nota», «nota para…» o «recuérdame»: todo lo que siga es el contenido de las notas.';
 const PRIO_MCP = { urgente: 'critica', critica: 'critica', alta: 'alta', normal: 'normal', baja: 'baja' };
@@ -973,6 +977,7 @@ function herramientaMcp(ahora = Date.now()) {
     title: 'Crear notas en Notas de obra',
     description: `Crea una o varias notas (tareas) en la app «Notas de obra» de un jefe de obra. Solo crea notas: no puede leer, buscar, cambiar ni borrar nada.
 ${FRASES_MCP}
+${CONTEXTO_MCP}
 Hoy es ${dia} ${p.fecha} y son las ${p.hora} (hora de Madrid). Calcula las fechas relativas («mañana», «el jueves») a partir de aquí.
 Reglas: una nota por asunto independiente. titulo corto (máximo 8 palabras), empezando por un verbo si es una acción. descripcion: los detalles útiles, sin inventar.
 prioridad: urgente (seguridad, paralización, hormigonados o plazos de hoy o mañana), alta, normal (por defecto) o baja.
