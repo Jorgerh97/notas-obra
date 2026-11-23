@@ -34,6 +34,11 @@
 //   POST   /personas/:id/traspasar    Solo el administrador: { usuario_id }. Las notas de esa persona pasan al usuario
 //                                     (la persona queda vinculada a él y deja de salir aparte en la app).
 //
+// Conector para Claude (MCP, 1.9.0): cada usuario puede crear una dirección secreta /mcp/CLAVE que se añade
+// en claude.ai como conector. Solo tiene la herramienta crear_notas: no lee, cambia ni borra nada.
+//   GET|POST|DELETE /conector         Estado, crear (devuelve la dirección una sola vez) o anular la clave del usuario.
+//   POST   /mcp/CLAVE                 Protocolo MCP (JSON-RPC) sin token: la clave va en la dirección.
+//
 // Dictado (fase 2): /transcribir y /analizar gastan la cuenta de Anthropic y Workers AI de Jorge, así que solo
 // los puede usar quien tenga puede_dictar. El usuario principal lo tiene siempre; los demás empiezan sin él.
 //
@@ -161,6 +166,8 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS nota_responsables (nota_id TEXT NOT NULL, tipo TEXT NOT NULL, ref_id TEXT NOT NULL, asignado_por TEXT, asignado_en TEXT,
      PRIMARY KEY (nota_id, tipo, ref_id))`,
   `CREATE INDEX IF NOT EXISTS idx_resp_ref ON nota_responsables(tipo, ref_id)`,
+  // 1.9.0: claves del conector para Claude (solo se guarda su huella SHA-256; una por usuario).
+  `CREATE TABLE IF NOT EXISTS mcp_claves (id TEXT PRIMARY KEY, usuario_id TEXT NOT NULL, clave_hash TEXT UNIQUE NOT NULL, creada TEXT, ultimo_uso TEXT, notas INTEGER DEFAULT 0)`,
 ];
 // Columnas añadidas después de la primera versión (la base de producción ya tiene datos).
 const COLUMNAS_NUEVAS = [
@@ -593,7 +600,7 @@ async function crearNota(env, b, dispositivo, { avisar = true } = {}) {
     aviso_cant: c.aviso_cant || null, aviso_unidad: c.aviso_unidad || null, alarma: c.alarma || null, alarma_enviada: 0,
     subir_critica: 'subir_critica' in c ? c.subir_critica : 1, duracion: c.duracion || null, checklist: c.checklist || null,
     repetir: c.repetir || null, serie: c.serie || null,
-    origen: ['manual', 'voz', 'app', 'csv', 'ics'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
+    origen: ['manual', 'voz', 'app', 'csv', 'ics', 'claude'].includes(b.origen) ? b.origen : 'manual', origen_ref: b.origen_ref ? txt(b.origen_ref, 200) : null,
     transcripcion: b.transcripcion ? txt(b.transcripcion, 20000) : null,
     creada: t, actualizada: t, realizada_en: c.realizada_en || null, eliminada_en: c.eliminada_en || null, borrar_en: c.borrar_en || null,
     realizada_por: c.estado === 'realizada' ? env.U : null, version: 1,
@@ -925,6 +932,199 @@ async function analizar(env, b) {
   return { notas, uso: data.usage || null };
 }
 
+
+// ---------- Conector para Claude (MCP) ----------
+// Servidor MCP mínimo (transporte HTTP «streamable», respuestas JSON, sin sesión). Una sola herramienta,
+// crear_notas, que solo AÑADE notas al usuario dueño de la clave. No hay ninguna herramienta de lectura: la
+// respuesta solo confirma lo creado y avisa de las etiquetas o responsables que no existen (no se crean).
+const MCP_VERSIONES = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
+const MCP_MAX_NOTAS = 20;
+const PRIO_MCP = { urgente: 'critica', critica: 'critica', alta: 'alta', normal: 'normal', baja: 'baja' };
+const AVISO_MCP = { horas: 'h', hora: 'h', h: 'h', dias: 'd', dia: 'd', d: 'd', semanas: 's', semana: 's', s: 's' };
+
+function nuevaClaveMcp() {
+  const b = crypto.getRandomValues(new Uint8Array(32));
+  return 'mc_' + btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+async function conector(env, M, request) {
+  if (M === 'GET') {
+    const f = await first(env, 'SELECT creada, ultimo_uso, notas FROM mcp_claves WHERE usuario_id = ?', env.U);
+    return { activo: !!f, creada: f ? f.creada : null, ultimo_uso: f ? f.ultimo_uso : null, notas: f ? f.notas || 0 : 0 };
+  }
+  if (M === 'POST') {   // crea una clave nueva y anula la anterior
+    const clave = nuevaClaveMcp();
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM mcp_claves WHERE usuario_id = ?').bind(env.U),
+      env.DB.prepare('INSERT INTO mcp_claves (id, usuario_id, clave_hash, creada, notas) VALUES (?, ?, ?, ?, 0)').bind(uuid(), env.U, await hashToken(clave), now()),
+    ]);
+    return { activo: true, url: new URL(request.url).origin + '/mcp/' + clave };
+  }
+  if (M === 'DELETE') { await run(env, 'DELETE FROM mcp_claves WHERE usuario_id = ?', env.U); return { activo: false }; }
+  throw new HttpError(405, 'Método no permitido.');
+}
+
+function herramientaMcp(ahora = Date.now()) {
+  const p = partesMadrid(ahora);
+  const dia = new Date(p.fecha + 'T12:00:00Z').toLocaleDateString('es-ES', { weekday: 'long', timeZone: 'UTC' });
+  return {
+    name: 'crear_notas',
+    title: 'Crear notas en Notas de obra',
+    description: `Crea una o varias notas (tareas) en la app «Notas de obra» de un jefe de obra. Solo crea notas: no puede leer, buscar, cambiar ni borrar nada.
+Hoy es ${dia} ${p.fecha} y son las ${p.hora} (hora de Madrid). Calcula las fechas relativas («mañana», «el jueves») a partir de aquí.
+Reglas: una nota por asunto independiente. titulo corto (máximo 8 palabras), empezando por un verbo si es una acción. descripcion: los detalles útiles, sin inventar.
+prioridad: urgente (seguridad, paralización, hormigonados o plazos de hoy o mañana), alta, normal (por defecto) o baja.
+fecha AAAA-MM-DD y hora HH:MM (24 h) solo si se dicen; en obra, «a las 3» es 15:00 y «a primera hora» 08:00. Si hay hora sin día, la fecha es hoy (o mañana si ya pasó). A la hora límite la app avisa sola.
+aviso: solo si se pide aviso con antelación (horas 1-12, dias 1-7, semanas 1-4).
+etiquetas: obras, industriales o temas tal como se nombran (por ejemplo «Obra123» o «la de Sabadell»); la app solo pone las que ya existen.
+responsables: nombres de las personas a quien va la tarea; la app solo pone los que ya existen.
+checklist: solo si se enumeran pasos. repetir: laborables, semanal, quincenal o mensual. duracion_minutos: solo si se dice cuánto dura.
+Después de crearlas, resume en una línea lo creado y los avisos que devuelva la herramienta.`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        notas: {
+          type: 'array', minItems: 1, maxItems: MCP_MAX_NOTAS,
+          items: {
+            type: 'object',
+            properties: {
+              titulo: { type: 'string', description: 'Título corto de la nota.' },
+              descripcion: { type: 'string' },
+              prioridad: { type: 'string', enum: ['urgente', 'alta', 'normal', 'baja'] },
+              fecha: { type: 'string', description: 'Fecha límite AAAA-MM-DD.' },
+              hora: { type: 'string', description: 'Hora límite HH:MM.' },
+              aviso: { type: 'object', properties: { unidad: { type: 'string', enum: ['horas', 'dias', 'semanas'] }, cantidad: { type: 'integer' } }, required: ['unidad', 'cantidad'] },
+              etiquetas: { type: 'array', items: { type: 'string' } },
+              responsables: { type: 'array', items: { type: 'string' } },
+              checklist: { type: 'array', items: { type: 'string' } },
+              repetir: { type: 'string', enum: REPETIR },
+              duracion_minutos: { type: 'integer' },
+            },
+            required: ['titulo'],
+          },
+        },
+      },
+      required: ['notas'],
+    },
+    annotations: { title: 'Crear notas', readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  };
+}
+
+// Nombres dichos → etiquetas y responsables existentes (nombre, alias o, para responsables, el nombre de pila si solo hay uno).
+async function catalogoMcp(env) {
+  const etiquetas = await all(env, 'SELECT id, nombre, alias, cerrada FROM etiquetas');
+  const usuarios = await all(env, 'SELECT id, nombre FROM usuarios WHERE activo = 1');
+  const personas = await all(env, 'SELECT id, nombre, usuario_vinculado FROM personas');
+  const etq = new Map();
+  for (const e of [...etiquetas].sort((a, b) => (a.cerrada || 0) - (b.cerrada || 0))) {   // las abiertas ganan
+    for (const n of [e.nombre, ...String(e.alias || '').split(',')]) {
+      const k = norm(n).replace(/^#/, '');
+      if (k && !etq.has(k)) etq.set(k, e);
+      if (k && !etq.has(k.replace(/[\s_-]+/g, ''))) etq.set(k.replace(/[\s_-]+/g, ''), e);
+    }
+  }
+  const resp = [
+    ...usuarios.map(u => ({ nombre: u.nombre, r: { tipo: 'usuario', id: u.id } })),
+    ...personas.map(x => ({ nombre: x.nombre, r: x.usuario_vinculado ? { tipo: 'usuario', id: x.usuario_vinculado } : { tipo: 'persona', id: x.id } })),
+  ];
+  const responsable = dicho => {
+    const k = norm(dicho);
+    if (!k) return null;
+    const exactos = resp.filter(x => norm(x.nombre) === k);
+    if (exactos.length) return exactos[0];
+    const parecidos = resp.filter(x => norm(x.nombre).split(/\s+/).includes(k) || norm(x.nombre).startsWith(k + ' '));
+    const unicos = [...new Map(parecidos.map(x => [x.r.tipo + ':' + x.r.id, x])).values()];
+    return unicos.length === 1 ? unicos[0] : null;
+  };
+  const etiqueta = dicho => { const k = norm(dicho).replace(/^#/, ''); return etq.get(k) || etq.get(k.replace(/[\s_-]+/g, '')) || null; };
+  return { etiqueta, responsable };
+}
+
+const fechaMcpTexto = n => n.fecha_limite ? n.fecha_limite.slice(8, 10) + '/' + n.fecha_limite.slice(5, 7) + (n.hora_limite ? ' ' + n.hora_limite : '') : '';
+async function crearNotasMcp(env, args) {
+  const lista = Array.isArray(args && args.notas) ? args.notas.slice(0, MCP_MAX_NOTAS) : [];
+  if (!lista.length) return { texto: 'No se ha creado ninguna nota: falta la lista «notas».', error: true };
+  const cat = await catalogoMcp(env), lineas = [], avisos = [];
+  for (const x of lista) {
+    const titulo = txt(x && x.titulo, 200).trim();
+    if (!titulo) { avisos.push('Una nota sin título no se ha creado.'); continue; }
+    const etiquetas = [], resp = [];
+    for (const e of Array.isArray(x.etiquetas) ? x.etiquetas.slice(0, 10) : []) {
+      const f = cat.etiqueta(String(e));
+      if (f) { if (!etiquetas.includes(f.id)) etiquetas.push(f.id); } else avisos.push(`«${titulo}»: la etiqueta «${txt(e, 40)}» no existe y no se ha puesto.`);
+    }
+    for (const nombre of Array.isArray(x.responsables) ? x.responsables.slice(0, 10) : []) {
+      if (['yo', 'mi', 'para mi'].includes(norm(nombre))) continue;
+      const f = cat.responsable(String(nombre));
+      if (f) { if (!resp.some(r => r.tipo === f.r.tipo && r.id === f.r.id)) resp.push(f.r); } else avisos.push(`«${titulo}»: el responsable «${txt(nombre, 40)}» no existe y no se ha puesto.`);
+    }
+    const { fecha_limite, hora_limite } = fechaHoraDictado({ fecha_limite: x.fecha || '', hora_limite: x.hora || '' });
+    if ((x.fecha && !fecha_limite) || (x.hora && !hora_limite)) avisos.push(`«${titulo}»: la fecha u hora no se ha entendido y se ha dejado sin ella.`);
+    const uni = x.aviso && AVISO_MCP[norm(x.aviso.unidad)], cant = x.aviso && Number(x.aviso.cantidad);
+    const aviso = fecha_limite && uni && avisoOk(uni, cant) ? { aviso_unidad: uni, aviso_cant: cant } : {};
+    const dur = Number.isInteger(x.duracion_minutos) && x.duracion_minutos > 0 && x.duracion_minutos <= 43200 ? x.duracion_minutos : undefined;
+    const nota = await crearNota(env, {
+      titulo, cuerpo: txt(x.descripcion, 4000).trim(), prioridad: PRIO_MCP[norm(x.prioridad)] || 'normal',
+      fecha_limite: fecha_limite || null, hora_limite: hora_limite || null, ...aviso,
+      etiquetas, responsables: resp, checklist: (Array.isArray(x.checklist) ? x.checklist : []).map(t => ({ t: txt(t, 200), hecho: false })),
+      repetir: REPETIR.includes(x.repetir) && fecha_limite ? x.repetir : null, ...(dur ? { duracion: dur } : {}), origen: 'claude',
+    }, 'Claude (conector)');
+    const prio = { critica: 'Urgente', alta: 'Alta', normal: 'Normal', baja: 'Baja' }[nota.prioridad];
+    lineas.push(`- «${nota.titulo}» · ${prio}${fechaMcpTexto(nota) ? ' · ' + fechaMcpTexto(nota) : ''}${etiquetas.length ? ' · ' + etiquetas.length + (etiquetas.length === 1 ? ' etiqueta' : ' etiquetas') : ''}${resp.length ? ' · ' + resp.length + (resp.length === 1 ? ' responsable' : ' responsables') : ''}`);
+  }
+  if (lineas.length) await run(env, 'UPDATE mcp_claves SET notas = COALESCE(notas, 0) + ? WHERE usuario_id = ?', lineas.length, env.U);
+  const cab = lineas.length ? (lineas.length === 1 ? 'Creada 1 nota:' : `Creadas ${lineas.length} notas:`) : 'No se ha creado ninguna nota.';
+  return { texto: [cab, ...lineas, ...(avisos.length ? ['', 'Avisos:', ...avisos.map(a => '- ' + a)] : [])].join('\n'), error: !lineas.length };
+}
+
+async function atenderMcp(request, env, clave) {
+  const cab = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
+  const resp = (d, status = 200) => new Response(JSON.stringify(d), { status, headers: cab });
+  if (request.method !== 'POST') return new Response('Este conector solo admite POST (MCP).', { status: 405, headers: { Allow: 'POST' } });
+  if (!env.DB) return resp({ jsonrpc: '2.0', id: null, error: { code: -32603, message: 'Falta la base de datos.' } }, 500);
+  await ensureSchema(env);
+  const fila = clave && clave.length >= 20 ? await first(env, `SELECT k.usuario_id FROM mcp_claves k JOIN usuarios u ON u.id = k.usuario_id
+    WHERE k.clave_hash = ? AND u.activo = 1`, await hashToken(clave)) : null;
+  if (!fila) return resp({ jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Dirección del conector no válida o anulada. Crea una nueva en Ajustes de la app.' } }, 404);
+  env = conUsuario(env, fila.usuario_id);
+  let cuerpo;
+  try { cuerpo = await request.json(); } catch { return resp({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'JSON no válido.' } }, 400); }
+  const unaPeticion = async m => {
+    if (!m || typeof m !== 'object') return { jsonrpc: '2.0', id: null, error: { code: -32600, message: 'Petición no válida.' } };
+    if (m.id === undefined) return null;   // notificaciones (notifications/initialized…): sin respuesta
+    const id = m.id, ok = result => ({ jsonrpc: '2.0', id, result }), mal = (code, message) => ({ jsonrpc: '2.0', id, error: { code, message } });
+    switch (m.method) {
+      case 'initialize': {
+        const pedida = m.params && m.params.protocolVersion;
+        return ok({ protocolVersion: MCP_VERSIONES.includes(pedida) ? pedida : MCP_VERSIONES[1], capabilities: { tools: {} },
+          serverInfo: { name: 'notas-obra', title: 'Notas de obra', version: '1.9.0' },
+          instructions: 'Usa crear_notas cuando el usuario dicte o pida apuntar tareas o notas de obra. Este conector no puede leer notas.' });
+      }
+      case 'ping': return ok({});
+      case 'tools/list': return ok({ tools: [herramientaMcp()] });
+      case 'tools/call': {
+        const nombre = m.params && m.params.name;
+        if (nombre !== 'crear_notas') return mal(-32602, 'Herramienta desconocida: ' + nombre);
+        try {
+          const r = await crearNotasMcp(env, m.params.arguments || {});
+          await run(env, 'UPDATE mcp_claves SET ultimo_uso = ? WHERE usuario_id = ?', now(), env.U);
+          return ok({ content: [{ type: 'text', text: r.texto }], isError: !!r.error });
+        } catch (e) {
+          return ok({ content: [{ type: 'text', text: 'No se han podido crear las notas: ' + (e.message || 'error') }], isError: true });
+        }
+      }
+      case 'resources/list': return ok({ resources: [] });
+      case 'prompts/list': return ok({ prompts: [] });
+      default: return mal(-32601, 'Método no disponible: ' + m.method);
+    }
+  };
+  if (Array.isArray(cuerpo)) {
+    const out = (await Promise.all(cuerpo.map(unaPeticion))).filter(Boolean);
+    return out.length ? resp(out) : new Response(null, { status: 202 });
+  }
+  const r = await unaPeticion(cuerpo);
+  return r ? resp(r) : new Response(null, { status: 202 });
+}
+
 // Hora del dictado: admite "9:30", "9.30" o "9" y la deja en "09:30". Si hay hora pero no día,
 // la fecha es hoy (o mañana si esa hora ya ha pasado en Madrid), como se pide a Claude.
 function normHora(v) {
@@ -1178,6 +1378,9 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors });
 
     try {
+      // Conector para Claude: no lleva token; la clave secreta va en la dirección (/mcp/CLAVE).
+      const pMcp = new URL(request.url).pathname.match(/^\/mcp\/([A-Za-z0-9_-]+)\/?$/);
+      if (pMcp) return await atenderMcp(request, env, pMcp[1]);
       if (!env.APP_TOKEN) return json({ error: 'Falta APP_TOKEN en el worker.' }, 500);
       const auth = request.headers.get('Authorization') || '';
       const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -1204,6 +1407,7 @@ export default {
       }
       if (M === 'GET' && path === '/yo') return json({ usuario: usuarioPublico(yo) });
       if (M === 'GET' && path === '/registro') return json(await registroHechas(env));
+      if (path === '/conector') return json(await conector(env, M, request));
       if (parts[0] === 'usuarios') return json(await gestionUsuarios(env, M, parts, request, yo));
       if (M === 'GET' && path === '/datos') return json(await leerDatos(env));
 

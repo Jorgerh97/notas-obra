@@ -74,6 +74,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.8.1** (19 nov 2026): «Horario ampliado» (7:00 – 24:00) en el Calendario y botón «Copiar» en las notas → `docs/PENDIENTE.md`.
 - **1.8.2** (20 nov 2026): arrastrar una nota a un grupo filtrado le añade sus etiquetas, prioridad y responsable (sin quitar nada) → `docs/PENDIENTE.md`.
 - **1.8.3** (23 nov 2026): duración «Otra…» con ruedas de cantidad y unidad (minutos, horas, días; hasta 30 días, también en el worker) → `docs/PENDIENTE.md`.
+- **1.9.0** (23 nov 2026, en dev): conector para Claude (MCP) en `/mcp/CLAVE`, solo `crear_notas`; Ajustes → «Conectar con Claude»; notas con 🤖 → `docs/PENDIENTE.md`. El dictado con la API se mantiene.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas

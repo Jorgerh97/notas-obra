@@ -2,6 +2,13 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Versión 1.9.0 (23 nov 2026): conector para Claude (MCP) — en dev, sin publicar en producción
+- Objetivo: dictar o escribir notas desde la app de Claude (suscripción de Jorge) sin gastar la clave de la API. **El dictado de la app con la API sigue igual** (Jorge lo quiere conservar).
+- Worker: tabla nueva `mcp_claves` (huella SHA-256 de la clave, una por usuario, `ultimo_uso`, `notas`). Rutas con token: `GET|POST|DELETE /conector` (estado / crear dirección, que anula la anterior y solo se devuelve una vez / desconectar). Ruta pública `POST /mcp/CLAVE` (antes de comprobar el token): MCP por HTTP con respuestas JSON y sin sesión (`initialize`, `ping`, `tools/list`, `tools/call`; las notificaciones responden 202). **Una sola herramienta, `crear_notas`**: no hay forma de leer, cambiar ni borrar. La descripción lleva la fecha y hora de Madrid. Etiquetas por nombre o alias y responsables por nombre (o nombre de pila si solo hay uno; personas vinculadas cuentan como su usuario); lo que no existe no se crea y se avisa en la respuesta. Origen `claude`, dispositivo «Claude (conector)». Usuario desactivado → el conector deja de funcionar. Pruebas: `test/mcp.test.mjs`.
+- App: Ajustes → «Conectar con Claude» (crear dirección con Copiar y pasos para claude.ai, crear otra, desconectar, último uso y notas creadas). Marca 🤖 (`MARCA_CLAUDE`) en Lista y Matriz, y «desde Claude (conector)» en la ficha.
+- En claude.ai: Configuración → Conectores → Añadir conector personalizado → URL. Luego se activa en el chat del móvil.
+- Para producción: copia de seguridad de la base antes (tabla nueva), `wrangler deploy --env ""` y `git push`.
+
 ## Hecho en la versión 1.8.3 (23 nov 2026)
 - Duración «Otra…» del editor: dos ruedas (desplegables) en lugar del campo en minutos: cantidad y unidad (minutos 5–120 de 5 en 5, horas 1–23, días 1–30). Se guarda en minutos como siempre; máximo 30 días (`DUR_MAX`, también en el worker: antes 1 día). Al cambiar la unidad se conserva la cantidad si existe en la nueva (si no, la más cercana). `textoDuracion` escribe «2 días», «1 día 1 h». En la Semana del calendario el bloque se corta al final del día (también el hueco al arrastrar). Publicada el 23 nov 2026 junto con la 1.8.2 (worker `d725350f-9f61-4496-bfee-db3c5093f2e5`). Prueba nueva en `test/worker.test.mjs`.
 

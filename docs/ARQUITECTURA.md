@@ -39,6 +39,8 @@ PWA (web que se instala como app) de **notas y tareas de obra** para Jorge, jefe
 - Push en todos los dispositivos del usuario, con botones «Hecha» y «Posponer 10 min». Con hora límite avisa a esa hora; el aviso previo sin hora suena a las 8:00.
 - En notas compartidas: aviso al asignar y al dar por hecha; los avisos de fecha van a todos los participantes.
 
+**Conector para Claude (1.9.0, en pruebas)**: cada usuario puede crear en Ajustes una dirección secreta y añadirla en claude.ai como conector. Así dicta o escribe notas desde la app de Claude, con su suscripción, sin gastar la clave de la API. El conector **solo crea notas** (herramienta `crear_notas`): no puede leer, cambiar ni borrar nada. Etiquetas y responsables se reconocen por nombre o alias; lo que no existe no se crea y Claude lo avisa. Las notas llegan con 🤖. El dictado de la propia app sigue existiendo.
+
 **Sin conexión**: todo se puede hacer sin cobertura; se envía al volver la conexión. Si dos dispositivos cambian la misma nota a la vez, se elige qué versión conservar.
 
 ## 3. Piezas y dónde están

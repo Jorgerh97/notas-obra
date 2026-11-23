@@ -1,5 +1,5 @@
 /* Service worker de Notas de obra */
-const CACHE = 'notas-v1.8.3';
+const CACHE = 'notas-v1.9.0';
 const ARCHIVOS = [
   './', 'index.html', 'app.css', 'app.js', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/badge.png',

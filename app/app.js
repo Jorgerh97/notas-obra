@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.8.3';
+const VERSION = '1.9.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -25,6 +25,8 @@ const MODOS = [['lista', 'Lista'], ['calendario', 'Calendario'], ['matriz', 'Mat
 const DURACIONES = [[10, '10 min'], [30, '30 min'], [60, '1 h'], [120, '2 h']];
 const DURACION_DEF = 10;   // minutos; las notas sin duración ocupan esto en el calendario
 const chip = (act, v, on, txt) => `<button class="chip" data-act="${act}" data-v="${esc(v)}" aria-pressed="${on}">${txt}</button>`;
+// Notas creadas desde la app de Claude con el conector (origen 'claude').
+const MARCA_CLAUDE = '<span class="marca-claude" title="Creada desde Claude" aria-label="Creada desde Claude">🤖</span>';
 const textoDuracion = m => m >= 1440 && m % 60 === 0
   ? Math.floor(m / 1440) + (m >= 2880 ? ' días' : ' día') + (m % 1440 ? ' ' + (m % 1440) / 60 + ' h' : '')
   : m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
@@ -715,6 +717,7 @@ function textoCuando(n) {
   if (textoCheck(n)) extra.push(`<span class="chk-n">${textoCheck(n)}</span>`);
   if (n.repetir) extra.push(`<span class="rep" title="${esc(textoRepetir(n.repetir))}">↻</span>`);
   if ((n.fotos || []).length) extra.push(`<span class="fotos-n">📷 ${n.fotos.length}</span>`);
+  if (n.origen === 'claude') extra.push(MARCA_CLAUDE);
   return { fecha, extra: extra.join(' ') };
 }
 function filaNota(n) {
@@ -897,7 +900,7 @@ function vistaMatriz() {
       const c = cuandoCorto(n), tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
       return `<div class="mx-row" data-id="${esc(n.id)}" data-drag="prio" data-titulo="${esc(n.titulo)}" data-cuando="${esc(c.t)}">
         <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
-        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${c.ic ? ` <span class="rep">${c.ic}</span>` : ''}${n.cuerpo ? `<span class="mx-body"><span class="mx-sep"> — </span>${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
+        <button class="mx-main" data-act="abrir" data-id="${esc(n.id)}"><b>${esc(n.titulo)}</b>${textoCheck(n) ? ` <span class="chk-n">${textoCheck(n)}</span>` : ''}${c.ic ? ` <span class="rep">${c.ic}</span>` : ''}${n.origen === 'claude' ? ' ' + MARCA_CLAUDE : ''}${n.cuerpo ? `<span class="mx-body"><span class="mx-sep"> — </span>${esc(n.cuerpo.replace(/\s+/g, ' '))}</span>` : ''}</button>
         <span class="mx-tags desk-only">${tags}</span>
         <span class="mx-when ${c.late ? 'late' : ''}">${esc(c.f)}</span>
       </div>`;
@@ -1490,7 +1493,7 @@ function pintarOverlay() {
   }
   if (a === 'importar') { ov.innerHTML = S.dic && S.dic.csv ? vistaRevisionDictado() : vistaImportar(); return; }
   if (a === 'historial') { ov.innerHTML = vistaHistorial(); if (S.ui.histTab === 'archivos') cargarArchivos(); return; }
-  if (a === 'ajustes') { ov.innerHTML = vistaAjustes(); cargarDispositivos(); return; }
+  if (a === 'ajustes') { ov.innerHTML = vistaAjustes(); cargarDispositivos(); cargarConector(); return; }
   if (a === 'revision') { if (!S.rev) iniciarRevision(); ov.innerHTML = vistaRevision(); return; }
   if (a === 'resumen') { ov.innerHTML = vistaResumen(); return; }
   if (a === 'registro') { ov.innerHTML = vistaRegistro(); return; }
@@ -1585,7 +1588,7 @@ function vistaEditor() {
       ${pistaRepetir(d)}</label>
     ${bloqueChecklist(d)}
     ${bloqueFotos(e)}
-    ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
+    ${n ? `<p class="hint">Creada el ${esc(fechaCorta(n.creada))}${n.origen === 'voz' ? ' por dictado' : n.origen === 'claude' ? ' desde Claude (conector)' : ''}. Última modificación: ${esc(fechaCorta(n.actualizada))}.</p>` : ''}
     ${n && n.estado !== 'activa' ? `<div class="banner"><span class="grow">Esta nota está ${n.estado === 'realizada' ? 'realizada' : 'en la papelera'}.</span><button class="btn small" data-act="ed-reabrir">Volver a pendiente</button></div>` : ''}`;
   const pie = n && n.estado === 'activa'
     ? `${esMia(nota(e.id) || {}) ? '<button class="btn danger" data-act="ed-borrar">Eliminar</button>' : ''}<button class="btn" data-act="ed-copiar" title="Crear otra nota igual">Copiar</button><button class="btn" data-act="ed-hecha">Realizada</button><button class="btn primary" data-act="ed-guardar">Guardar</button>`
@@ -2657,6 +2660,11 @@ function vistaAjustes() {
     <div id="dispositivos" class="list-plain"></div>
   </section>
 
+  <section class="card"><h2>Conectar con Claude</h2>
+    <p class="hint">Para dictar o escribir notas desde la app de Claude (móvil u ordenador) gastando tu suscripción de Claude y no la clave de la API. El conector <b>solo puede crear notas</b>: no puede leer, cambiar ni borrar nada.</p>
+    <div id="conector"><p class="hint">Cargando…</p></div>
+  </section>
+
   <section class="card"><div class="row"><h2 class="grow">Etiquetas</h2><button class="btn small" data-act="etq-nueva">+ Nueva</button></div>
     <p class="hint">Los alias son las palabras que usas al hablar («la nave», «Sabadell»). Ayudan a acertar la etiqueta cuando dictas. Al cerrar una obra se archiva un informe con todas sus notas.</p>
     ${TIPOS.map(([t, nombre]) => { const es = S.etiquetas.filter(e => e.tipo === t); return es.length ? `<h3>${nombre}</h3><div class="list-plain">${es.map(e => `<div><span class="grow"><b>#${esc(e.nombre)}${e.cerrada ? ' · cerrada' : ''}</b><small>${e.alias ? 'Alias: ' + esc(e.alias) : 'Sin alias'} · ${cont(e)} notas</small></span><button class="btn small" data-act="etq-editar" data-id="${esc(e.id)}">Editar</button></div>`).join('')}</div>` : ''; }).join('') || '<p class="hint">Todavía no hay etiquetas. Crea una aquí o escribe # en cualquier nota.</p>'}
@@ -2696,6 +2704,26 @@ function vistaAjustes() {
   </section>
   <p class="hint">Notas de obra · versión ${VERSION}</p>`;
   return pagina('Ajustes', cuerpo, '');
+}
+// «Conectar con Claude»: la dirección secreta solo se ve justo después de crearla (el worker guarda su huella).
+async function cargarConector(url) {
+  const el = () => $('#conector');
+  if (!el()) return;
+  if (!S.cfg.url || !S.cfg.token) { el().innerHTML = '<p class="hint">Primero conecta la app con el worker.</p>'; return; }
+  try {
+    const c = await api('/conector');
+    if (!el()) return;
+    const nueva = url ? `<div class="conector-url"><label class="field"><span>Dirección del conector <small>(cópiala ahora: no se vuelve a mostrar)</small></span>
+        <input class="input" id="conector-url" value="${esc(url)}" readonly></label>
+        <div class="row"><button class="btn primary" data-act="conector-copiar">Copiar</button></div>
+        <ol class="hint conector-pasos"><li>En el ordenador, abre claude.ai → Configuración → Conectores → <b>Añadir conector personalizado</b>.</li>
+        <li>Nombre: «Notas de obra». En la dirección (URL) pega la que acabas de copiar y pulsa Añadir.</li>
+        <li>En la app de Claude del móvil, activa el conector en el chat (botón de herramientas) y dicta: «Apunta: mañana a las 9 llamar al gruista, urgente».</li></ol></div>` : '';
+    el().innerHTML = c.activo
+      ? `${nueva}<p class="hint">${url ? '' : '<b>Conectado.</b> '}Creada ${esc(fechaCorta(c.creada))}${c.ultimo_uso ? ' · último uso ' + esc(fechaCorta(c.ultimo_uso)) : ' · todavía sin usar'} · ${c.notas === 1 ? '1 nota creada' : c.notas + ' notas creadas'}. Las notas llegan marcadas con 🤖.</p>
+         <div class="row"><button class="btn" data-act="conector-crear" data-v="otra">Crear otra dirección</button><button class="btn danger" data-act="conector-anular">Desconectar</button></div>`
+      : `<div class="row"><button class="btn primary" data-act="conector-crear">Crear dirección del conector</button></div>`;
+  } catch (e) { if (el()) el().innerHTML = `<p class="hint">No se ha podido consultar el conector: ${esc(e.message || 'sin conexión')}</p>`; }
 }
 async function cargarDispositivos() {
   const el = () => $('#dispositivos');
@@ -3061,6 +3089,18 @@ const ACT = {
   'push-activar': () => activarAvisos(),
   'push-probar': async () => { try { const r = await api('/push/prueba', { method: 'POST', body: {} }); toast(r.total ? `Aviso enviado a ${r.enviados} de ${r.total} dispositivos.` : 'Ningún dispositivo tiene los avisos activados.'); } catch (e) { toast(e.message); } },
   'disp-activo': async (el) => { try { await api('/dispositivos/' + el.dataset.id, { method: 'PUT', body: { activo: el.dataset.v === '1' } }); cargarDispositivos(); } catch (e) { toast(e.message); } },
+  'conector-crear': async (el) => {
+    if (el.dataset.v === 'otra' && !confirm('La dirección anterior dejará de funcionar y tendrás que cambiarla en claude.ai. ¿Crear otra?')) return;
+    try { const r = await api('/conector', { method: 'POST' }); await cargarConector(r.url); } catch (e) { toast(e.message); }
+  },
+  'conector-anular': async () => {
+    if (!confirm('El conector de Claude dejará de funcionar. Las notas ya creadas se quedan. ¿Desconectar?')) return;
+    try { await api('/conector', { method: 'DELETE' }); await cargarConector(); toast('Conector desconectado. Puedes quitarlo también de claude.ai.'); } catch (e) { toast(e.message); }
+  },
+  'conector-copiar': async () => {
+    const i = $('#conector-url'); if (!i) return;
+    try { await navigator.clipboard.writeText(i.value); toast('Dirección copiada.'); } catch { i.select(); toast('Selecciónala y cópiala a mano.'); }
+  },
   'disp-borrar': async (el) => { if (!confirm('¿Dejar de enviar avisos a este dispositivo?')) return; try { await api('/dispositivos/' + el.dataset.id, { method: 'DELETE' }); cargarDispositivos(); } catch (e) { toast(e.message); } },
   'etq-nueva': () => { S.modal = { tipo: 'etiqueta', id: null }; renderModal(); },
   'etq-editar': (el) => { S.modal = { tipo: 'etiqueta', id: el.dataset.id }; renderModal(); },

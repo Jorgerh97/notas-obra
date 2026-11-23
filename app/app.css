@@ -613,3 +613,9 @@ body.con-ov .toasts { bottom: auto; top: calc(64px + env(safe-area-inset-top)); 
 /* Duración «Otra…»: cantidad y unidad (1.8.3) */
 .dur-ruedas { display: inline-flex; gap: 6px; }
 .dur-ruedas select { width: auto; min-width: 72px; }
+/* Conector para Claude (1.9.0) */
+.marca-claude { font-size: 12px; opacity: .85; }
+.conector-url { margin-bottom: 8px; }
+.conector-url input { font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+.conector-pasos { margin: 8px 0 0; padding-left: 20px; }
+.conector-pasos li { margin: 2px 0; }
