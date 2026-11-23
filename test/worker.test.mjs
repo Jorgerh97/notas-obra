@@ -216,6 +216,12 @@ ok((await r2.list({ prefix: 'fotos/nota_fotos/' })).objects.length === 0, 'al bo
 rb = await bin('POST', '/notas/no_existe_x/fotos/foto_000001/grande', jpeg(10));
 ok(rb.s === 404, 'foto de una nota que no existe');
 
+// Duración en días (1.8.3): hasta 30 días (43.200 min); más, no se guarda.
+r = await call('POST', '/notas', { id: 'nota_dias', titulo: 'Montaje grúa', prioridad: 'normal', duracion: 3 * 1440 });
+ok(r.d.nota.duracion === 4320, 'guarda una duración de 3 días');
+r = await call('PUT', '/notas/nota_dias', { duracion: 31 * 1440, base_version: r.d.nota.version });
+ok(r.d.nota.duracion === null, 'una duración de más de 30 días no se guarda');
+
 // Notas recurrentes
 const hoyM = madrid(Date.now()).fecha;
 const masDias = (f, n) => new Date(Date.parse(f + 'T12:00:00Z') + n * 864e5).toISOString().slice(0, 10);

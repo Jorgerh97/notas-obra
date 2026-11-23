@@ -2,6 +2,9 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Hecho en la versión 1.8.3 (23 nov 2026)
+- Duración «Otra…» del editor: dos ruedas (desplegables) en lugar del campo en minutos: cantidad y unidad (minutos 5–120 de 5 en 5, horas 1–23, días 1–30). Se guarda en minutos como siempre; máximo 30 días (`DUR_MAX`, también en el worker: antes 1 día). Al cambiar la unidad se conserva la cantidad si existe en la nueva (si no, la más cercana). `textoDuracion` escribe «2 días», «1 día 1 h». En la Semana del calendario el bloque se corta al final del día (también el hueco al arrastrar). **Cambia el worker**: hay que publicarlo (`--env ""`). Prueba nueva en `test/worker.test.mjs`.
+
 ## Hecho en la versión 1.8.2 (20 nov 2026)
 - Arrastrar una nota (Lista, Calendario o Matriz, en ordenador) sobre un grupo filtrado de la barra lateral le aplica los filtros del grupo, **solo añadiendo**: las etiquetas que le faltan (en modo «alguna», la primera si no tiene ninguna; las que ya tenía se conservan), la prioridad si no es una de las del grupo (la más alta de las del grupo) y un responsable del grupo si no tiene ninguno de ellos. «Con avisos», «Vencen esta semana» y «Sin tocar» no se pueden aplicar y se avisa. Con «Deshacer». Código: `cambiosParaGrupo`, `soltarEnGrupo`, `aplicarGrupoNota` (destino `grupo` de `SOLTAR`).
 

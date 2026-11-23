@@ -1,6 +1,6 @@
 # Notas de obra · cómo funciona la app (documento de consulta)
 
-Documento completo para **hablar de la app en otro chat**: estudiar opciones, costes, ideas y dudas. Describe la app tal como está en la **versión 1.8.2** (20 nov 2026; la 1.8.2 está hecha pero se publica a final del día).
+Documento completo para **hablar de la app en otro chat**: estudiar opciones, costes, ideas y dudas. Describe la app tal como está en la **versión 1.8.3** (23 nov 2026; la 1.8.2 y la 1.8.3 están hechas y pendientes de publicar).
 
 > **Para el chat que lea esto:** tu papel es **consultar y proponer**, no programar ni publicar. No cambies archivos del proyecto, no ejecutes `wrangler deploy` ni `git push` y no toques las bases de datos. Si de la conversación sale algo que hacer, resúmelo al final en una lista corta («Para el chat de producción») que Jorge pueda pegar en el chat donde se hacen los cambios. Responde en castellano y con lenguaje sencillo: Jorge es jefe de obra, no programador. Nunca pidas claves ni tokens.
 
@@ -18,7 +18,7 @@ PWA (web que se instala como app) de **notas y tareas de obra** para Jorge, jefe
 ## 2. Qué hace (funciones)
 
 **Notas**
-- Título, descripción (con `#etiquetas` escritas), prioridad (**Urgente**, Alta, Normal, Baja), etiquetas (tipos: obra, industrial, acción, responsable, otra; con alias para el dictado), responsables, fecha límite con hora opcional, aviso previo (1–12 h, 1–7 días o 1–4 semanas), duración, checklist, repetición (laborables, semanal, quincenal, mensual) y hasta varias fotos.
+- Título, descripción (con `#etiquetas` escritas), prioridad (**Urgente**, Alta, Normal, Baja), etiquetas (tipos: obra, industrial, acción, responsable, otra; con alias para el dictado), responsables, fecha límite con hora opcional, aviso previo (1–12 h, 1–7 días o 1–4 semanas), duración (botones rápidos o «Otra…» con ruedas de cantidad y unidad: minutos, horas o días, hasta 30 días), checklist, repetición (laborables, semanal, quincenal, mensual) y hasta varias fotos.
 - «Subir a Urgente» automático cuando faltan menos de 24 h.
 - Botón **Copiar** (crea una nota igual), **Realizada** (con Deshacer), papelera de 30 días.
 - Las realizadas se guardan **un año** (las de obras abiertas, siempre). Antes de borrar, se archiva un informe HTML. Avisos a 30 y 7 días del borrado.
@@ -156,6 +156,7 @@ El worker crea y amplía las tablas él solo. **Regla: solo se añaden columnas 
 | 1.8.0 | 19 nov 2026 | Importar calendarios de Outlook (.ics), varios archivos a la vez |
 | 1.8.1 | 19 nov 2026 | Horario ampliado en el calendario, botón Copiar |
 | 1.8.2 | 20 nov 2026 | Arrastrar una nota a un grupo filtrado le añade sus filtros (pendiente de publicar) |
+| 1.8.3 | 23 nov 2026 | Duración con ruedas de cantidad y unidad, hasta 30 días (pendiente de publicar; cambia también el worker) |
 
 ## 12. Condiciones que cualquier propuesta debe respetar
 

@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.8.2';
+const VERSION = '1.8.3';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -25,7 +25,18 @@ const MODOS = [['lista', 'Lista'], ['calendario', 'Calendario'], ['matriz', 'Mat
 const DURACIONES = [[10, '10 min'], [30, '30 min'], [60, '1 h'], [120, '2 h']];
 const DURACION_DEF = 10;   // minutos; las notas sin duración ocupan esto en el calendario
 const chip = (act, v, on, txt) => `<button class="chip" data-act="${act}" data-v="${esc(v)}" aria-pressed="${on}">${txt}</button>`;
-const textoDuracion = m => m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+const textoDuracion = m => m >= 1440 && m % 60 === 0
+  ? Math.floor(m / 1440) + (m >= 2880 ? ' días' : ' día') + (m % 1440 ? ' ' + (m % 1440) / 60 + ' h' : '')
+  : m < 60 ? m + ' min' : Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : '');
+// Duración «Otra…»: una rueda para la cantidad y otra para la unidad (se guarda siempre en minutos).
+const DUR_MAX = 30 * 1440;   // 30 días
+const DUR_UNID = { min: [1, 'minutos'], h: [60, 'horas'], d: [1440, 'días'] };
+const DUR_CANT = { min: Array.from({ length: 24 }, (_, i) => (i + 1) * 5), h: Array.from({ length: 23 }, (_, i) => i + 1), d: Array.from({ length: 30 }, (_, i) => i + 1) };
+const unidadDur = m => (m >= 1440 && m % 1440 === 0 ? 'd' : m >= 60 && m % 60 === 0 ? 'h' : 'min');
+function opcionesCantDur(u, m) {
+  const c = m / DUR_UNID[u][0], lista = DUR_CANT[u].includes(c) || !Number.isInteger(c) ? DUR_CANT[u] : [...DUR_CANT[u], c].sort((a, b) => a - b);
+  return lista.map(x => `<option value="${x}" ${x === c ? 'selected' : ''}>${x}</option>`).join('');
+}
 
 const ICON = {
   mic: '<svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
@@ -1175,7 +1186,8 @@ const SOLTAR = {
       let m = ini * 60 + Math.round((st.y - (st.offY || 0) - r.top) / CAL_HH * 60 / 15) * 15;
       m = Math.min(Math.max(m, ini * 60), fin * 60 - 15);
       hora = pad2(Math.floor(m / 60)) + ':' + pad2(m % 60);
-      hueco = { top: (m - ini * 60) / 60 * CAL_HH, alto: Math.max(durNota(n) / 60 * CAL_HH - 2, 20) };
+      const top = (m - ini * 60) / 60 * CAL_HH;
+      hueco = { top, alto: Math.max(Math.min(durNota(n) / 60 * CAL_HH - 2, r.height - top), 20) };
     } else if (d.dataset.sinhora) hora = null;
     if (f === n.fecha_limite && hora === (n.hora_limite || null)) return null;
     const donde = mayus(diaCorto(f).replace(',', '')) + (hora ? ', ' + hora : ' (sin hora)');
@@ -1520,7 +1532,7 @@ function iniciarEditor(id) {
         aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
       : { titulo: '', cuerpo: '', prioridad: 'normal', responsables: S.ui.filtro.personas.length === 1 && S.ui.filtro.personas[0] !== 'ninguna' && S.ui.filtro.personas[0] !== 'u:' + yoId() && (S.ui.filtro.personas[0].startsWith('u:') || per(S.ui.filtro.personas[0])) ? [respDeClave(S.ui.filtro.personas[0])] : [], fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
         aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
-    durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)),
+    durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)), durU: unidadDur(n && n.duracion || DURACION_DEF),
     sug: null, sel: 0, enfocar: !n,
   };
   S.prefill = null;   // fecha y hora elegidas en el calendario: solo valen para esta nota nueva
@@ -1565,7 +1577,7 @@ function vistaEditor() {
     <div class="field"><span class="field-label">Duración <small>(opcional · ocupa hueco en el calendario)</small></span>
       <div class="dur-pick">${DURACIONES.map(([m, t]) => `<button type="button" data-act="ed-dur" data-v="${m}" aria-pressed="${!e.durOtra && Number(d.duracion) === m}">${t}</button>`).join('')}
         <button type="button" data-act="ed-dur" data-v="otra" aria-pressed="${e.durOtra}">Otra…</button>
-        ${e.durOtra ? `<input class="input" type="number" min="1" max="1440" step="5" inputmode="numeric" data-ed="duracion" value="${esc(d.duracion)}" aria-label="Duración en minutos"> <small>min</small>` : ''}</div>
+        ${e.durOtra ? `<span class="dur-ruedas"><select class="input" data-ed="dur-cant" aria-label="Cantidad">${opcionesCantDur(e.durU, Number(d.duracion))}</select><select class="input" data-ed="dur-unid" aria-label="Unidad">${Object.entries(DUR_UNID).map(([u, [, t]]) => `<option value="${u}" ${u === e.durU ? 'selected' : ''}>${t}</option>`).join('')}</select></span>` : ''}</div>
       <small class="hint">Si no eliges nada, se reservan 10 minutos.</small>
     </div>
     <label class="check"><input type="checkbox" data-ed="subir_critica" ${d.subir_critica ? 'checked' : ''}>Subir a Urgente cuando falten 24 h para la fecha límite</label>
@@ -1601,7 +1613,7 @@ function pintarAvisos() { const b = $('#ed-avisos'); if (b && S.ed) b.outerHTML 
 // Duración en minutos tal como se guarda. En una nota antigua sin duración, los 10 min por defecto no se guardan.
 function duracionGuardar(d, n) {
   const m = Math.round(Number(d.duracion));
-  const v = m >= 1 && m <= 1440 ? m : DURACION_DEF;
+  const v = m >= 1 && m <= DUR_MAX ? m : DURACION_DEF;
   return n && !n.duracion && v === DURACION_DEF ? null : v;
 }
 // Fecha, hora y aviso tal como se guardan (sin fecha no hay hora ni aviso).
@@ -2910,10 +2922,12 @@ const ACT = {
     renderOverlay();
   },
   'ed-dur': (el) => {
-    if (el.dataset.v === 'otra') S.ed.durOtra = true;
-    else { S.ed.durOtra = false; S.ed.d.duracion = Number(el.dataset.v); }
+    if (el.dataset.v === 'otra') {
+      S.ed.durOtra = true; S.ed.durU = unidadDur(Number(S.ed.d.duracion) || DURACION_DEF);
+      if (!(Number(S.ed.d.duracion) % DUR_UNID[S.ed.durU][0] === 0)) S.ed.d.duracion = DURACION_DEF;
+    } else { S.ed.durOtra = false; S.ed.d.duracion = Number(el.dataset.v); }
     renderOverlay();
-    if (S.ed.durOtra) { const i = $('[data-ed="duracion"]'); if (i) i.focus(); }
+    if (S.ed.durOtra) { const i = $('[data-ed="dur-cant"]'); if (i) i.focus(); }
   },
   'foto-ver': (el) => { S.modal = { tipo: 'foto', nota: el.dataset.nota, id: el.dataset.v }; renderModal(); },
   'foto-quitar': () => {
@@ -3185,6 +3199,15 @@ document.addEventListener('input', ev => {
   }
   if (S.ed && t.dataset.chkT != null) { S.ed.d.checklist[Number(t.dataset.chkT)].t = t.value; return; }
   if (S.ed && t.dataset.chk != null) { S.ed.d.checklist[Number(t.dataset.chk)].hecho = t.checked; pintarChecklist(); return; }
+  // Ruedas de la duración «Otra…»: al cambiar la unidad se conserva la cantidad si cabe (si no, la más cercana).
+  if (S.ed && t.dataset.ed === 'dur-cant') { S.ed.d.duracion = Number(t.value) * DUR_UNID[S.ed.durU][0]; return; }
+  if (S.ed && t.dataset.ed === 'dur-unid') {
+    const u = t.value, sel = $('[data-ed="dur-cant"]'), c = Number(sel ? sel.value : 1), l = DUR_CANT[u];
+    const c2 = l.includes(c) ? c : l.reduce((a, x) => Math.abs(x - c) < Math.abs(a - c) ? x : a, l[0]);
+    S.ed.durU = u; S.ed.d.duracion = c2 * DUR_UNID[u][0];
+    if (sel) sel.innerHTML = opcionesCantDur(u, S.ed.d.duracion);
+    return;
+  }
   if (t.dataset.ed && S.ed) {
     S.ed.d[t.dataset.ed] = t.type === 'checkbox' ? t.checked : t.value;
     if (t.dataset.ed === 'cuerpo') onCuerpo(t);

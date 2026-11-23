@@ -541,7 +541,7 @@ async function limpiarCampos(env, b, parcial) {
   // "alarma" solo llega de la versión anterior de la app; la nueva envía la fecha, la hora y el aviso.
   if ('alarma' in b) c.alarma = isoOk(b.alarma) ? new Date(b.alarma).toISOString() : null;
   if ('subir_critica' in b) c.subir_critica = b.subir_critica ? 1 : 0;
-  if ('duracion' in b) c.duracion = Number.isInteger(b.duracion) && b.duracion > 0 && b.duracion <= 1440 ? b.duracion : null;
+  if ('duracion' in b) c.duracion = Number.isInteger(b.duracion) && b.duracion > 0 && b.duracion <= 43200 ? b.duracion : null;
   if ('checklist' in b) { const l = limpiarChecklist(b.checklist); c.checklist = l.length ? JSON.stringify(l) : null; }
   if ('estado' in b) {
     if (!ESTADOS.includes(b.estado)) throw new HttpError(400, 'Estado no válido.');

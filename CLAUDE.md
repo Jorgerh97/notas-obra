@@ -73,6 +73,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.8.0** (19 nov 2026): importar calendarios de Outlook (.ics) y varios archivos a la vez → `docs/PENDIENTE.md`.
 - **1.8.1** (19 nov 2026): «Horario ampliado» (7:00 – 24:00) en el Calendario y botón «Copiar» en las notas → `docs/PENDIENTE.md`.
 - **1.8.2** (20 nov 2026): arrastrar una nota a un grupo filtrado le añade sus etiquetas, prioridad y responsable (sin quitar nada) → `docs/PENDIENTE.md`.
+- **1.8.3** (23 nov 2026): duración «Otra…» con ruedas de cantidad y unidad (minutos, horas, días; hasta 30 días, también en el worker) → `docs/PENDIENTE.md`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 
 ## Pruebas
