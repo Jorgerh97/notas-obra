@@ -1,6 +1,6 @@
 # Notas de obra · cómo funciona la app (documento de consulta)
 
-Documento completo para **hablar de la app en otro chat**: estudiar opciones, costes, ideas y dudas. Describe la app tal como está en la **versión 1.8.3** (publicada el 23 nov 2026; worker de producción `d725350f`).
+Documento completo para **hablar de la app en otro chat**: estudiar opciones, costes, ideas y dudas. Describe la app tal como está en la **versión 1.9.0** (publicada el 23 nov 2026; worker de producción `fcae21cd`).
 
 > **Para el chat que lea esto:** tu papel es **consultar y proponer**, no programar ni publicar. No cambies archivos del proyecto, no ejecutes `wrangler deploy` ni `git push` y no toques las bases de datos. Si de la conversación sale algo que hacer, resúmelo al final en una lista corta («Para el chat de producción») que Jorge pueda pegar en el chat donde se hacen los cambios. Responde en castellano y con lenguaje sencillo: Jorge es jefe de obra, no programador. Nunca pidas claves ni tokens.
 
@@ -39,7 +39,7 @@ PWA (web que se instala como app) de **notas y tareas de obra** para Jorge, jefe
 - Push en todos los dispositivos del usuario, con botones «Hecha» y «Posponer 10 min». Con hora límite avisa a esa hora; el aviso previo sin hora suena a las 8:00.
 - En notas compartidas: aviso al asignar y al dar por hecha; los avisos de fecha van a todos los participantes.
 
-**Conector para Claude (1.9.0, en pruebas)**: cada usuario puede crear en Ajustes una dirección secreta y añadirla en claude.ai como conector. Así dicta o escribe notas desde la app de Claude, con su suscripción, sin gastar la clave de la API. El conector **solo crea notas** (herramienta `crear_notas`): no puede leer, cambiar ni borrar nada. Etiquetas y responsables se reconocen por nombre o alias; lo que no existe no se crea y Claude lo avisa. Las notas llegan con 🤖. El dictado de la propia app sigue existiendo.
+**Conector para Claude (1.9.0)**: cada usuario puede crear en Ajustes una dirección secreta y añadirla en claude.ai como conector. Así dicta o escribe notas desde la app de Claude, con su suscripción, sin gastar la clave de la API. El conector **solo crea notas** (herramienta `crear_notas`): no puede leer, cambiar ni borrar nada. Etiquetas y responsables se reconocen por nombre o alias; lo que no existe no se crea y Claude lo avisa. Las notas llegan con 🤖. El dictado de la propia app sigue existiendo.
 
 **Sin conexión**: todo se puede hacer sin cobertura; se envía al volver la conexión. Si dos dispositivos cambian la misma nota a la vez, se elige qué versión conservar.
 
@@ -159,6 +159,7 @@ El worker crea y amplía las tablas él solo. **Regla: solo se añaden columnas 
 | 1.8.1 | 19 nov 2026 | Horario ampliado en el calendario, botón Copiar |
 | 1.8.2 | 20 nov 2026 | Arrastrar una nota a un grupo filtrado le añade sus filtros |
 | 1.8.3 | 23 nov 2026 | Duración con ruedas de cantidad y unidad, hasta 30 días (también en el worker) |
+| 1.9.0 | 23 nov 2026 | Conector para Claude (MCP): crear notas desde la app de Claude con la suscripción; solo crea, no lee |
 
 ## 12. Condiciones que cualquier propuesta debe respetar
 
