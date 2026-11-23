@@ -138,6 +138,7 @@ El worker crea y amplía las tablas él solo. **Regla: solo se añaden columnas 
 ## 10. Ideas y temas abiertos
 
 - Sincronización por cambios (ver 9).
+- Conector para Claude: poner la clave en un «encabezado de solicitud» de claude.ai en lugar de en la dirección (así la URL no lleva nada secreto). Propuesto el 23 nov 2026; Jorge lo aplaza.
 - Control del gasto de dictado por usuario (ver 9).
 - ¿Asignarse una nota a uno mismo? (ver 4).
 - Mejorar el dictado con ruido de fondo (más calidad de audio, vocabulario de obra a Whisper) → `docs/PENDIENTE.md`.
