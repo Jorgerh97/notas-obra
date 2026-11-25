@@ -249,14 +249,14 @@ async function responsablesDe(env, ids) {
   }
   return mapa;
 }
-// Lista de responsables recibida: solo usuarios activos y personas que existen, sin repetidos ni el dueño.
-async function limpiarResponsables(env, lista, dueno) {
+// Lista de responsables recibida: solo usuarios activos y personas que existen, sin repetidos. El dueño también puede estar (1.9.1).
+async function limpiarResponsables(env, lista) {
   const usuarios = new Set((await all(env, 'SELECT id FROM usuarios WHERE activo = 1')).map(r => r.id));
   const personas = new Set((await all(env, 'SELECT id FROM personas')).map(r => r.id));
   const out = [], vistos = new Set();
   for (const x of Array.isArray(lista) ? lista : []) {
     const tipo = x && x.tipo, id = x && x.id;
-    if (!((tipo === 'usuario' && usuarios.has(id) && id !== dueno) || (tipo === 'persona' && personas.has(id)))) continue;
+    if (!((tipo === 'usuario' && usuarios.has(id)) || (tipo === 'persona' && personas.has(id)))) continue;
     if (vistos.has(tipo + ':' + id)) continue;
     vistos.add(tipo + ':' + id); out.push({ tipo, id });
   }
@@ -264,11 +264,11 @@ async function limpiarResponsables(env, lista, dueno) {
 }
 // Responsables del cuerpo de la petición. La app antigua solo envía persona_id: se cambia la persona y se
 // conservan los usuarios. null = no se tocan.
-async function responsablesDelCuerpo(env, b, actuales, dueno) {
-  if (Array.isArray(b.responsables)) return limpiarResponsables(env, b.responsables, dueno);
+async function responsablesDelCuerpo(env, b, actuales) {
+  if (Array.isArray(b.responsables)) return limpiarResponsables(env, b.responsables);
   if ('persona_id' in b) {
     const usuarios = (actuales || []).filter(r => r.tipo === 'usuario');
-    return limpiarResponsables(env, [...(isId(b.persona_id) ? [{ tipo: 'persona', id: b.persona_id }] : []), ...usuarios], dueno);
+    return limpiarResponsables(env, [...(isId(b.persona_id) ? [{ tipo: 'persona', id: b.persona_id }] : []), ...usuarios]);
   }
   return null;
 }
@@ -328,7 +328,7 @@ async function traspasarPersona(env, personaId, usuarioId) {
     WHERE r.tipo = 'persona' AND r.ref_id = ?`, personaId);
   const t = now(), ops = [];
   for (const n of notas) {
-    if (n.dueno !== u.id) ops.push(env.DB.prepare(`INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en) VALUES (?, 'usuario', ?, ?, ?)`)
+    ops.push(env.DB.prepare(`INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en) VALUES (?, 'usuario', ?, ?, ?)`)
       .bind(n.nota_id, u.id, env.U, t));
     ops.push(env.DB.prepare(`DELETE FROM nota_responsables WHERE nota_id = ? AND tipo = 'persona' AND ref_id = ?`).bind(n.nota_id, personaId));
     // persona_id = la primera persona que quede (app antigua); la versión sube para que los dispositivos la recojan.
@@ -351,7 +351,7 @@ async function traspasarPersona(env, personaId, usuarioId) {
 // aquellas en las que participa; el administrador, todas. Los filtros los aplica la app.
 async function registroHechas(env) {
   const compartida = `EXISTS (SELECT 1 FROM nota_responsables r LEFT JOIN personas p ON r.tipo = 'persona' AND p.id = r.ref_id
-    WHERE r.nota_id = notas.id AND (r.tipo = 'usuario' OR p.usuario_vinculado IS NOT NULL))`;
+    WHERE r.nota_id = notas.id AND COALESCE(CASE WHEN r.tipo = 'usuario' THEN r.ref_id ELSE p.usuario_vinculado END, notas.usuario_id) != notas.usuario_id)`;
   const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE estado = 'realizada' AND ${compartida}
     ${env.A ? '' : 'AND ' + VISIBLE} ORDER BY realizada_en DESC LIMIT 2000`, ...(env.A ? [] : vis(env)));
   const ids = notas.map(n => n.id), mapa = await etiquetasDe(env, ids), resp = await responsablesDe(env, ids);
@@ -608,8 +608,9 @@ async function crearNota(env, b, dispositivo, { avisar = true } = {}) {
   const cols = Object.keys(fila);
   await run(env, `INSERT INTO notas (${cols.join(',')}) VALUES (${cols.map(() => '?').join(',')})`, ...cols.map(k => fila[k]));
   await ponerEtiquetas(env, id, b.etiquetas);
-  const resp = await responsablesDelCuerpo(env, b, [], env.U);
-  const nuevos = resp ? await ponerResponsables(env, id, resp) : [];
+  // Si no se indica nada, la nota es de quien la crea; una lista vacía es «Nadie».
+  const resp = Array.isArray(b.responsables) || isId(b.persona_id) ? await responsablesDelCuerpo(env, b, []) : [{ tipo: 'usuario', id: env.U }];
+  const nuevos = await ponerResponsables(env, id, resp);
   await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)', id, env.U, t, dispositivo, 'crear', null);
   const nota = await leerNota(env, id);
   if (avisar) await avisarAsignados(env, nota, nuevos);
@@ -637,7 +638,7 @@ async function editarNota(env, ctx, id, b, dispositivo) {
   const cols = Object.keys(c);
   await run(env, `UPDATE notas SET ${cols.map(k => k + ' = ?').join(', ')}, version = version + 1 WHERE id = ?`, ...cols.map(k => c[k]), id);
   if (Array.isArray(b.etiquetas)) await ponerEtiquetas(env, id, b.etiquetas);
-  const resp = await responsablesDelCuerpo(env, b, antes.responsables, antes.usuario_id);
+  const resp = await responsablesDelCuerpo(env, b, antes.responsables);
   const nuevos = resp ? await ponerResponsables(env, id, resp) : [];
   await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)',
     id, env.U, t, dispositivo, c.estado && c.estado !== antes.estado ? 'estado:' + c.estado : 'editar', JSON.stringify(antes));
@@ -984,7 +985,7 @@ prioridad: urgente (seguridad, paralización, hormigonados o plazos de hoy o ma�
 fecha AAAA-MM-DD y hora HH:MM (24 h) solo si se dicen; en obra, «a las 3» es 15:00 y «a primera hora» 08:00. Si hay hora sin día, la fecha es hoy (o mañana si ya pasó). A la hora límite la app avisa sola.
 aviso: solo si se pide aviso con antelación (horas 1-12, dias 1-7, semanas 1-4).
 etiquetas: obras, industriales o temas tal como se nombran (por ejemplo «Obra123» o «la de Sabadell»); la app solo pone las que ya existen.
-responsables: nombres de las personas a quien va la tarea; la app solo pone los que ya existen.
+responsables: nombres de las personas a quien va la tarea; la app solo pone los que ya existen. Si no se dice nadie, no lo rellenes: la nota queda asignada al propio usuario. Usa «yo» si la comparte con otros y «nadie» solo si pide dejarla sin asignar.
 checklist: solo si se enumeran pasos. repetir: laborables, semanal, quincenal o mensual. duracion_minutos: solo si se dice cuánto dura.
 Después de crearlas, resume en una línea lo creado y los avisos que devuelva la herramienta.`,
     inputSchema: {
@@ -1055,16 +1056,18 @@ async function crearNotasMcp(env, args) {
   for (const x of lista) {
     const titulo = txt(x && x.titulo, 200).trim();
     if (!titulo) { avisos.push('Una nota sin título no se ha creado.'); continue; }
-    const etiquetas = [], resp = [];
+    const etiquetas = [], resp = [], yoMismo = { tipo: 'usuario', id: env.U };
+    let nadie = false;
     for (const e of Array.isArray(x.etiquetas) ? x.etiquetas.slice(0, 10) : []) {
       const f = cat.etiqueta(String(e));
       if (f) { if (!etiquetas.includes(f.id)) etiquetas.push(f.id); } else avisos.push(`«${titulo}»: la etiqueta «${txt(e, 40)}» no existe y no se ha puesto.`);
     }
     for (const nombre of Array.isArray(x.responsables) ? x.responsables.slice(0, 10) : []) {
-      if (['yo', 'mi', 'para mi'].includes(norm(nombre))) continue;
-      const f = cat.responsable(String(nombre));
+      if (['nadie', 'sin asignar', 'sin responsable'].includes(norm(nombre))) { nadie = true; continue; }
+      const f = ['yo', 'mi', 'para mi'].includes(norm(nombre)) ? { r: yoMismo } : cat.responsable(String(nombre));
       if (f) { if (!resp.some(r => r.tipo === f.r.tipo && r.id === f.r.id)) resp.push(f.r); } else avisos.push(`«${titulo}»: el responsable «${txt(nombre, 40)}» no existe y no se ha puesto.`);
     }
+    if (!resp.length && !nadie) resp.push(yoMismo);   // por defecto, de quien la crea
     const { fecha_limite, hora_limite } = fechaHoraDictado({ fecha_limite: x.fecha || '', hora_limite: x.hora || '' });
     if ((x.fecha && !fecha_limite) || (x.hora && !hora_limite)) avisos.push(`«${titulo}»: la fecha u hora no se ha entendido y se ha dejado sin ella.`);
     const uni = x.aviso && AVISO_MCP[norm(x.aviso.unidad)], cant = x.aviso && Number(x.aviso.cantidad);
@@ -1077,7 +1080,7 @@ async function crearNotasMcp(env, args) {
       repetir: REPETIR.includes(x.repetir) && fecha_limite ? x.repetir : null, ...(dur ? { duracion: dur } : {}), origen: 'claude',
     }, 'Claude (conector)');
     const prio = { critica: 'Urgente', alta: 'Alta', normal: 'Normal', baja: 'Baja' }[nota.prioridad];
-    lineas.push(`- «${nota.titulo}» · ${prio}${fechaMcpTexto(nota) ? ' · ' + fechaMcpTexto(nota) : ''}${etiquetas.length ? ' · ' + etiquetas.length + (etiquetas.length === 1 ? ' etiqueta' : ' etiquetas') : ''}${resp.length ? ' · ' + resp.length + (resp.length === 1 ? ' responsable' : ' responsables') : ''}`);
+    lineas.push(`- «${nota.titulo}» · ${prio}${fechaMcpTexto(nota) ? ' · ' + fechaMcpTexto(nota) : ''}${etiquetas.length ? ' · ' + etiquetas.length + (etiquetas.length === 1 ? ' etiqueta' : ' etiquetas') : ''}${resp.some(r => r.id !== env.U) ? ' · ' + resp.length + (resp.length === 1 ? ' responsable' : ' responsables') : ''}`);
   }
   if (lineas.length) await run(env, 'UPDATE mcp_claves SET notas = COALESCE(notas, 0) + ? WHERE usuario_id = ?', lineas.length, env.U);
   const cab = lineas.length ? (lineas.length === 1 ? 'Creada 1 nota:' : `Creadas ${lineas.length} notas:`) : 'No se ha creado ninguna nota.';

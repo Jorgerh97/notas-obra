@@ -164,11 +164,11 @@ const notaDe = async (quien, id) => ((await quien('GET', '/datos')).d.notas || [
 pushes.length = 0;
 r = await yo('POST', '/notas', { id: 'nota_comp_1', titulo: 'Hormigonar losa', prioridad: 'alta', etiquetas: ['et_obra_yo'],
   responsables: [{ tipo: 'usuario', id: idB }, { tipo: 'persona', id: 'persona_yo_1' }, { tipo: 'usuario', id: 'yo' }, { tipo: 'usuario', id: 'no_existe_99' }] });
-ok(r.s === 200 && r.d.nota.responsables.length === 2 && r.d.nota.persona_id === 'persona_yo_1' && r.d.nota.usuario_id === 'yo',
-  'una nota con varios responsables (sin el dueño ni usuarios que no existen); persona_id = primera persona');
+ok(r.s === 200 && r.d.nota.responsables.length === 3 && r.d.nota.persona_id === 'persona_yo_1' && r.d.nota.usuario_id === 'yo',
+  'una nota con varios responsables (también el dueño; no los usuarios que no existen); persona_id = primera persona');
 ok(pushes.includes('/b') && !pushes.includes('/yo2') && !pushes.includes('/c'), 'aviso solo al responsable asignado (' + pushes.join(', ') + ')');
 let nb = await notaDe(b2, 'nota_comp_1');
-ok(nb && nb.usuario_id === 'yo' && nb.responsables.length === 2, 'el responsable ve la nota compartida y quién la creó');
+ok(nb && nb.usuario_id === 'yo' && nb.responsables.length === 3, 'el responsable ve la nota compartida y quién la creó');
 ok(!(await notaDe(b2, 'nota_yo_1')), '…pero no las demás notas del dueño');
 ok(!(await notaDe(c3, 'nota_comp_1')), 'quien no es responsable no la ve');
 r = await b2('PUT', '/notas/nota_comp_1', { titulo: 'Hormigonar losa planta 2', prioridad: 'alta', base_version: nb.version });
@@ -179,7 +179,7 @@ r = await b2('DELETE', '/notas/nota_comp_1'); ok(r.s === 403, 'el responsable no
 r = await b2('PUT', '/notas/nota_comp_1', { titulo: 'Hormigonar losa planta 2', base_version: 1 }); ok(r.s === 409 && r.d.conflicto, 'dos usuarios a la vez: el mismo control de conflictos que entre dispositivos');
 // App antigua: solo persona_id → cambia la persona y se conservan los usuarios
 r = await b2('PUT', '/notas/nota_comp_1', { titulo: 'Hormigonar losa planta 2', persona_id: null });
-ok(r.d.nota.responsables.length === 1 && r.d.nota.responsables[0].id === idB && r.d.nota.persona_id === null, 'la app antigua (solo persona_id) no quita a los usuarios responsables');
+ok(r.d.nota.responsables.length === 2 && r.d.nota.responsables.some(x => x.id === idB) && r.d.nota.persona_id === null, 'la app antigua (solo persona_id) no quita a los usuarios responsables');
 // Darla por hecha
 pushes.length = 0;
 nb = await notaDe(b2, 'nota_comp_1');
@@ -248,6 +248,22 @@ ok(np && np.persona_id === null && np.responsables.length === 1, 'la nota que so
 ok(pushes.filter(x => x === '/d').length === 1, 'el usuario recibe un único aviso con sus notas nuevas (' + pushes.join(', ') + ')');
 const traspasos = await db.prepare("SELECT COUNT(*) AS n FROM cambios WHERE accion LIKE 'traspaso:%'").first();
 ok(traspasos.n === 2, 'el traspaso queda en el historial de cada nota');
+
+// ---------- 1.9.1: por defecto, la nota es de quien la crea ----------
+pushes.length = 0;
+r = await yo('POST', '/notas', { id: 'nota_def_1', titulo: 'Sin indicar responsable', prioridad: 'normal' });
+ok(r.d.nota.responsables.length === 1 && r.d.nota.responsables[0].id === 'yo', 'sin responsables indicados, queda asignada a quien la crea');
+r = await b2('POST', '/notas', { id: 'nota_def_b', titulo: 'De B', prioridad: 'normal', persona_id: null });
+ok(r.d.nota.responsables.length === 1 && r.d.nota.responsables[0].id === idB && !(await notaDe(yo, 'nota_def_b')), 'cada usuario, a sí mismo, y sigue siendo privada');
+r = await yo('POST', '/notas', { id: 'nota_def_2', titulo: 'Para nadie', prioridad: 'normal', responsables: [] });
+ok(r.d.nota.responsables.length === 0, 'una lista vacía la deja sin asignar');
+r = await yo('POST', '/notas', { id: 'nota_def_3', titulo: 'Para otra persona', prioridad: 'normal', responsables: [{ tipo: 'persona', id: 'persona_yo_1' }] });
+ok(r.d.nota.responsables.length === 1 && r.d.nota.responsables[0].id === 'persona_yo_1', 'si se indica otro, no se añade quien la crea');
+ok(pushes.length === 0, 'asignarse una nota a uno mismo no envía aviso');
+const nd = await notaDe(yo, 'nota_def_1');
+await yo('PUT', '/notas/nota_def_1', { titulo: nd.titulo, estado: 'realizada', base_version: nd.version });
+r = await yo('GET', '/registro');
+ok(!r.d.notas.some(n => n.id === 'nota_def_1'), 'una nota propia no aparece en las tareas hechas compartidas');
 
 // ---------- Resumen matutino: también las notas compartidas asignadas ----------
 const horaMadrid = ms => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Madrid', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));

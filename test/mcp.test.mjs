@@ -83,6 +83,11 @@ ok(r.d.notas === 2 && r.d.ultimo_uso, 'el estado cuenta las notas creadas y el �
 r = await mcp(ruta, 'tools/call', { name: 'crear_notas', arguments: { notas: [{ titulo: '' }] } });
 ok(r.d.result.isError === true, 'sin título no se crea nada y se marca como error');
 
+await mcp(ruta, 'tools/call', { name: 'crear_notas', arguments: { notas: [{ titulo: 'Mcp para mí' }, { titulo: 'Mcp nadie', responsables: ['nadie'] }, { titulo: 'Mcp los dos', responsables: ['yo', 'Julián'] }] } });
+r = await yo('GET', '/datos');
+const respM = t => r.d.notas.find(n => n.titulo === t).responsables.map(x => x.id).sort().join();
+ok(respM('Mcp para mí') === 'yo' && respM('Mcp nadie') === '' && respM('Mcp los dos') === ['yo', idJ].sort().join(), 'conector: por defecto a uno mismo, «nadie» sin asignar, «yo» y otro los dos');
+
 // ---------- Claves de cada usuario y anulación ----------
 r = await jul('POST', '/conector');
 const rutaJ = new URL(r.d.url).pathname;
