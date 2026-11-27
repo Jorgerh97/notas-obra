@@ -142,6 +142,9 @@ r = await call('POST', '/notas/nota_alarma/alarma', { accion: 'posponer', minuto
 ok(r.d.nota.alarma > new Date(Date.now() + 9 * 60000).toISOString(), 'posponer 10 min');
 r = await call('POST', '/notas/nota_alarma/alarma', { accion: 'hecha' });
 ok(r.d.nota.estado === 'realizada', 'hecha desde el aviso');
+const versionHecha = r.d.nota.version;
+r = await call('POST', '/notas/nota_alarma/alarma', { accion: 'hecha', endpoint: 'https://push.example/abc' });
+ok(r.s === 200 && r.d.nota.estado === 'realizada' && r.d.nota.version === versionHecha, '«hecha» desde el aviso de una nota ya hecha no da error ni la cambia');
 await new Promise(res => setTimeout(res, 300));
 ok(pushes.some(x => JSON.parse(ece.decrypt(x.body, { version: 'aes128gcm', privateKey: ua, authSecret: b64u(authSecret) }).toString()).tipo === 'cerrar'), 'se envía cierre del aviso a otros dispositivos');
 

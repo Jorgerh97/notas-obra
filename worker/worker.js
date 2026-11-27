@@ -667,6 +667,10 @@ async function accionAlarma(env, ctx, id, b, dispositivo) {
   const n = await leerNota(env, id);
   if (!n) throw new HttpError(404, 'La nota ya no existe.');
   if (b.accion === 'hecha') {
+    if (n.estado === 'realizada') {   // ya estaba hecha (p. ej. desde otro dispositivo): solo quitar el aviso
+      ctx.waitUntil(cerrarAvisos(env, id, typeof b.endpoint === 'string' ? b.endpoint : null));
+      return n;
+    }
     const c = { estado: 'realizada' };
     efectosEstado(c, n);
     await run(env, 'UPDATE notas SET estado = ?, realizada_en = ?, realizada_por = ?, eliminada_en = NULL, borrar_en = ?, aviso30 = 0, aviso7 = 0, actualizada = ?, version = version + 1 WHERE id = ?',
