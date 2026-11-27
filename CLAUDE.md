@@ -75,7 +75,7 @@ Tablas: `notas` (con `version`, `duracion` en minutos ya existente, `hora_limite
 - **1.8.2** (20 nov 2026): arrastrar una nota a un grupo filtrado le añade sus etiquetas, prioridad y responsable (sin quitar nada) → `docs/PENDIENTE.md`.
 - **1.8.3** (23 nov 2026): duración «Otra…» con ruedas de cantidad y unidad (minutos, horas, días; hasta 30 días, también en el worker) → `docs/PENDIENTE.md`.
 - **1.9.0** (23 nov 2026, en producción): conector para Claude (MCP) en `/mcp/CLAVE`, solo `crear_notas`; Ajustes → «Conectar con Claude»; notas con 🤖 → `docs/PENDIENTE.md`. El dictado con la API se mantiene.
-- **1.10.0** (27 nov 2026, sin publicar): «Compartir con» usuarios además de responsables (columna `nota_responsables.papel`) → `docs/PENDIENTE.md`.
+- **1.10.0** (publicada 27 nov 2026): «Compartir con» usuarios además de responsables (columna `nota_responsables.papel`) → `docs/PENDIENTE.md`.
 - **1.9.1** (publicada 27 nov 2026; incluye corrección de «Hecha» desde aviso de nota ya hecha, que bloqueaba la cola): las notas nuevas se asignan por defecto a quien las crea («Yo»; `responsables: []` = «Nadie») → `docs/PENDIENTE.md`.
 - **Aplazado**: eventos de calendario externo (se hará con las reuniones de Microsoft cuando le den acceso).
 

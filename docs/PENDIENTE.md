@@ -2,12 +2,12 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
-## Versión 1.10.0 (27 nov 2026): «Compartir con» — sin publicar
+## Versión 1.10.0 (27 nov 2026): «Compartir con» — publicada el 27 nov 2026 (worker 9445dfa3; copia previa en `../copias-seguridad/2026-11-27-compartir/`)
 - Además de los responsables, una nota se puede compartir con usuarios de la app (no con personas sin cuenta). Quien la tiene compartida la ve y puede editarla y marcarla hecha (como un responsable), recibe «Te han compartido una nota» y «Nota hecha», pero **no** los avisos de hora ni cuenta en el resumen matutino. No sale en el filtro «Responsable: X»; tiene su filtro «Compartidas conmigo» (en Otros). En listas y papel aparece con 👁.
 - Base: columna nueva `nota_responsables.papel` (`'r'` responsable, por defecto; `'c'` compartida). Solo se añade la columna (se crea sola al arrancar el worker); las filas actuales quedan como `'r'`.
 - Worker: las notas llevan `compartida: [ids de usuario]` aparte de `responsables`. `POST/PUT /notas` aceptan `compartida`; si no llega, no se toca (la app 1.9 sigue funcionando). Se quitan el dueño y quien ya es responsable; hacer responsable a alguien lo saca de «compartida». `participantes(env, id, true)` (solo responsables) para alarmas y cierre de avisos; `VISIBLE_RESP` para el resumen matutino. Conector: campo `compartir_con`.
 - App: apartado «Compartir con» en el editor (👁; quien ya es responsable sale desactivado). Los avisos locales de la app no suenan en notas que solo tienes compartidas.
-- Probado: 323 pruebas automáticas y en el navegador con servidor local (editor, guardado, lista, ancho de móvil). Sin probar en el entorno dev ni en producción. Publicar el worker antes que la app.
+- Probado: 323 pruebas automáticas y en el navegador con servidor local (editor, guardado, lista, ancho de móvil). Publicada sin pasar por el entorno dev; comprobado en producción que /datos devuelve `compartida` y conserva los responsables.
 
 ## Versión 1.9.1 (25 nov 2026): notas asignadas a uno mismo por defecto — publicada el 27 nov 2026 (worker d1885fef)
 - Al crear una nota sin indicar responsable, queda asignada a quien la crea (se guarda como fila `usuario` del dueño en `nota_responsables`; sin cambio de esquema). Vale para nota nueva, calendario, dictado, importar CSV/.ics y conector. `responsables: []` es «Nadie» y se respeta.
