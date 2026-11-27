@@ -2,11 +2,12 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
-## Versión 1.9.1 (25 nov 2026): notas asignadas a uno mismo por defecto — sin publicar
+## Versión 1.9.1 (25 nov 2026): notas asignadas a uno mismo por defecto — publicada el 27 nov 2026 (worker d1885fef)
 - Al crear una nota sin indicar responsable, queda asignada a quien la crea (se guarda como fila `usuario` del dueño en `nota_responsables`; sin cambio de esquema). Vale para nota nueva, calendario, dictado, importar CSV/.ics y conector. `responsables: []` es «Nadie» y se respeta.
 - App: botón «Yo» en el editor, marcado por defecto; en una nota nueva, elegir a otro lo sustituye y «Yo» se puede volver a pulsar para estar los dos. Con un responsable o «Sin asignar» como filtro activo, manda el filtro. Revisión del dictado: «Yo» (defecto), «Nadie» o una persona. Arrastrar a un responsable una nota que solo tiene su dueño la pasa a ese responsable. Si solo la tiene el dueño, no se escribe en las listas ni cuenta como compartida.
 - Worker: `limpiarResponsables` admite al dueño; `crearNota` lo pone si no llegan responsables ni `persona_id`; el registro de hechas no cuenta al dueño; el traspaso de persona asigna también las notas propias; conector: «yo» y «nadie».
-- Las notas anteriores siguen sin asignar (no se han tocado). Publicar el worker antes que la app.
+- Las notas anteriores siguen sin asignar (no se han tocado).
+- Corrección incluida: «Hecha» desde un aviso de una nota que ya estaba hecha daba error 500 (D1_TYPE_ERROR, porque `efectosEstado` no rellena fechas si el estado no cambia). La app trata el 500 como «Sin conexión» y no pasa del primer cambio de la cola, así que bloqueaba todos los demás (le pasó al ordenador con 30 cambios). Ahora el worker lo acepta sin cambiar nada y solo cierra el aviso.
 
 ## Hecho en la versión 1.9.0 (23 nov 2026): conector para Claude (MCP) — publicada (worker `fcae21cd-7e6b-44cf-a143-1db1574df8cc`; copia previa en `../copias-seguridad/2026-11-23-conector/`)
 - Objetivo: dictar o escribir notas desde la app de Claude (suscripción de Jorge) sin gastar la clave de la API. **El dictado de la app con la API sigue igual** (Jorge lo quiere conservar).
