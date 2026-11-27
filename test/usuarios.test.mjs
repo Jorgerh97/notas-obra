@@ -276,6 +276,41 @@ await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
 ok(pushes.includes('/d'), 'resumen matutino: cuenta las notas compartidas asignadas, como las propias (' + pushes.join(', ') + ')');
 ok(!pushes.includes('/e'), 'resumen matutino: sin notas pendientes no se envía');
 
+// ---------- 1.10.0: «Compartir con» (ven la nota sin ser responsables) ----------
+pushes.length = 0;
+r = await yo('POST', '/notas', { id: 'nota_cmp_1', titulo: 'Revisar planos de estructura', prioridad: 'alta', responsables: [{ tipo: 'usuario', id: idD }], compartida: [idC, 'yo', 'inventado'] });
+ok(r.d.nota.compartida.length === 1 && r.d.nota.compartida[0] === idC && r.d.nota.responsables.length === 1 && r.d.nota.responsables[0].id === idD, 'compartir: solo usuarios activos, sin el dueño, y aparte de los responsables');
+await new Promise(res => setTimeout(res, 200));
+ok(pushes.includes('/c') && pushes.includes('/d'), 'compartir avisa al usuario («Te han compartido una nota»), igual que asignar');
+let nc = await notaDe(c3, 'nota_cmp_1');
+ok(nc && nc.compartida.includes(idC) && !nc.responsables.some(x => x.id === idC), 'quien la tiene compartida la ve, sin salir como responsable');
+r = await c3('PUT', '/notas/nota_cmp_1', { titulo: 'Revisar planos de estructura y forjados', base_version: nc.version });
+ok(r.s === 200 && r.d.nota.titulo.endsWith('forjados'), 'quien la tiene compartida puede editarla');
+r = await yo('PUT', '/notas/nota_cmp_1', { responsables: [{ tipo: 'usuario', id: idD }, { tipo: 'usuario', id: 'yo' }] });
+ok(r.d.nota.compartida.length === 1 && r.d.nota.compartida[0] === idC, 'cambiar solo los responsables (app antigua) no quita a quien la tiene compartida');
+pushes.length = 0;
+await db.prepare("UPDATE notas SET alarma = ?, alarma_enviada = 0 WHERE id = 'nota_cmp_1'").bind(new Date(Date.now() - 60000).toISOString()).run();
+await sched.scheduled({ cron: '* * * * *', scheduledTime: Date.now() });
+ok(pushes.includes('/d') && !pushes.includes('/c'), 'el aviso de hora llega a los responsables, no a quien solo la tiene compartida (' + pushes.join(', ') + ')');
+pushes.length = 0;
+nc = await notaDe(d4, 'nota_cmp_1');
+await d4('PUT', '/notas/nota_cmp_1', { estado: 'realizada', base_version: nc.version });
+await new Promise(res => setTimeout(res, 200));
+ok(pushes.includes('/c'), '«Nota hecha» sí llega a quien la tiene compartida');
+r = await yo('GET', '/registro');
+ok(r.d.notas.some(n => n.id === 'nota_cmp_1' && n.compartida.includes(idC)), 'el registro de hechas incluye a quien la tenía compartida');
+r = await yo('POST', '/notas', { id: 'nota_cmp_2', titulo: 'Pasar de compartida a responsable', prioridad: 'normal', compartida: [idC] });
+ok(r.d.nota.responsables.length === 1 && r.d.nota.responsables[0].id === 'yo' && r.d.nota.compartida[0] === idC, 'sin responsables indicados sigue siendo de quien la crea, y compartida');
+r = await yo('PUT', '/notas/nota_cmp_2', { responsables: [{ tipo: 'usuario', id: 'yo' }, { tipo: 'usuario', id: idC }] });
+ok(r.d.nota.compartida.length === 0 && r.d.nota.responsables.some(x => x.id === idC), 'al pasar a responsable deja de estar en «compartida»');
+r = await yo('PUT', '/notas/nota_cmp_2', { responsables: [{ tipo: 'usuario', id: 'yo' }], compartida: [idC] });
+ok(r.d.nota.compartida[0] === idC && r.d.nota.responsables.length === 1, 'y se puede volver a dejar solo compartida');
+nc = await notaDe(c3, 'nota_cmp_2');
+r = await c3('PUT', '/notas/nota_cmp_2', { compartida: [], base_version: nc.version });
+ok(r.d.nota.sin_acceso === true && !(await notaDe(c3, 'nota_cmp_2')), 'si se quita a sí mismo, deja de verla');
+r = await c3('POST', '/notas', { id: 'nota_cmp_c', titulo: 'Privada del tercero', prioridad: 'normal' });
+ok(!(await notaDe(yo, 'nota_cmp_c')), 'las notas privadas siguen sin verse');
+
 // Borrar una persona común: solo quien la creó o el administrador
 r = await c3('DELETE', '/personas/persona_de_c'); ok(r.s === 403, 'otro usuario no puede borrar una persona común');
 r = await yo('DELETE', '/personas/persona_de_c'); ok(r.s === 200 && !(await notaDe(c3, 'nota_para_c')), 'al borrar la persona desaparece de las notas y se deja de compartir');

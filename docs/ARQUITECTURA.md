@@ -13,6 +13,7 @@ Otros documentos: `CLAUDE.md` (instrucciones de trabajo y reglas), `docs/PENDIEN
 PWA (web que se instala como app) de **notas y tareas de obra** para Jorge, jefe de obra de una contratista en Barcelona. Se usa en el móvil (en obra), en la tablet y en el ordenador (oficina).
 
 - **Usuarios**: desde la 1.7.1 (18 nov 2026) es **multiusuario**. Jorge es el usuario `yo` y administrador. Hay al menos otro usuario real («Julián JGR»). Cada usuario entra con **su propio token** (una contraseña larga que se pone en Ajustes).
+- **Compartir con (1.10.0, sin publicar)**: aparte de los responsables, se puede compartir una nota con usuarios de la app: la ven y la editan, reciben «compartida» y «hecha», pero no los avisos de hora. Se guarda en `nota_responsables` con `papel = 'c'`.
 - **Responsable por defecto (1.9.1)**: si no se indica nadie, la nota nueva queda asignada a quien la crea; se puede elegir a otro, a varios o «Nadie». Las notas antiguas sin responsable se asignaron a su creador el 27 nov 2026.
 - **Responsables**: una nota puede tener uno o varios responsables. Pueden ser **usuarios de la app** (la ven y la pueden trabajar) o **personas sin cuenta** (solo un nombre, para filtrar y saber a quién se encargó).
 

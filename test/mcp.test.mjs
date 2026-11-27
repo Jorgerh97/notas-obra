@@ -86,6 +86,10 @@ ok(r.d.result.isError === true, 'sin título no se crea nada y se marca como err
 await mcp(ruta, 'tools/call', { name: 'crear_notas', arguments: { notas: [{ titulo: 'Mcp para mí' }, { titulo: 'Mcp nadie', responsables: ['nadie'] }, { titulo: 'Mcp los dos', responsables: ['yo', 'Julián'] }] } });
 r = await yo('GET', '/datos');
 const respM = t => r.d.notas.find(n => n.titulo === t).responsables.map(x => x.id).sort().join();
+await mcp(ruta, 'tools/call', { name: 'crear_notas', arguments: { notas: [{ titulo: 'Mcp compartida', compartir_con: ['Julián', 'Pere'] }] } });
+r = await yo('GET', '/datos');
+const nComp = r.d.notas.find(n => n.titulo === 'Mcp compartida');
+ok(nComp.compartida.length === 1 && nComp.compartida[0] === idJ && nComp.responsables.length === 1 && nComp.responsables[0].id === 'yo', 'conector: compartir con un usuario de la app (una persona sin cuenta no se comparte)');
 ok(respM('Mcp para mí') === 'yo' && respM('Mcp nadie') === '' && respM('Mcp los dos') === ['yo', idJ].sort().join(), 'conector: por defecto a uno mismo, «nadie» sin asignar, «yo» y otro los dos');
 
 // ---------- Claves de cada usuario y anulación ----------

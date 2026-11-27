@@ -1,7 +1,7 @@
 'use strict';
 /* Notas de obra · fase 1 */
 
-const VERSION = '1.9.1';
+const VERSION = '1.10.0';
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -125,7 +125,7 @@ const idb = {
 };
 
 // ---------- Estado ----------
-const filtroVacio = () => ({ etiquetas: [], modo: 'todas', prioridades: [], personas: [], conAlarma: false, venceSemana: false, estancadas: false });
+const filtroVacio = () => ({ etiquetas: [], modo: 'todas', prioridades: [], personas: [], conAlarma: false, venceSemana: false, estancadas: false, compartidas: false });
 const S = {
   cfg: { url: '', token: '', dispositivo: '', pushEndpoint: '' },
   notas: [], etiquetas: [], personas: [], vistas: [], srv: {},
@@ -154,9 +154,14 @@ const nombreUsu = id => id === yoId() ? 'tú' : ((usu(id) || {}).nombre || 'otro
 const nombreResp = r => r.tipo === 'usuario' ? nombreUsu(r.id) : ((per(r.id) || {}).nombre || '');
 const textoResp = n => respDe(n).map(nombreResp).filter(Boolean).join(', ');
 const esMia = n => !S.usuario || !n.usuario_id || n.usuario_id === S.usuario.id;
+// 1.10.0: usuarios con los que está compartida (la ven sin ser responsables; sin avisos de hora).
+const compDe = n => Array.isArray(n.compartida) ? n.compartida : [];
+const meLaCompartieron = n => !!yoId() && compDe(n).includes(yoId());
+// Para imprimir y en las listas: «👁 Julián» (sin «tú» en el papel).
+const textoComp = (n, papel) => compDe(n).map(id => papel ? (usu(id) || {}).nombre : nombreUsu(id)).filter(Boolean).join(', ');
 const esCompartida = n => {
   const dueno = n.usuario_id || yoId();
-  return !esMia(n) || respDe(n).some(r => { const u = r.tipo === 'usuario' ? r.id : (per(r.id) || {}).usuario_vinculado; return u && u !== dueno; });
+  return !esMia(n) || compDe(n).some(u => u !== dueno) || respDe(n).some(r => { const u = r.tipo === 'usuario' ? r.id : (per(r.id) || {}).usuario_vinculado; return u && u !== dueno; });
 };
 // 1.9.1: por defecto una nota nueva es de quien la crea. Si solo la tiene su dueño, en las listas no se escribe.
 const respDefecto = () => yoId() ? [{ tipo: 'usuario', id: yoId() }] : [];
@@ -357,7 +362,7 @@ function crearNotaLocal(campos) {
   const n = {
     id: campos.id || uid(), titulo: campos.titulo, cuerpo: campos.cuerpo || '', prioridad: campos.prioridad || 'normal', estado: 'activa',
     persona_id: campos.persona_id || null, fecha_limite: campos.fecha_limite || null, hora_limite: campos.hora_limite || null,
-    responsables: campos.responsables || (campos.persona_id ? [{ tipo: 'persona', id: campos.persona_id }] : []), usuario_id: yoId(),
+    responsables: campos.responsables || (campos.persona_id ? [{ tipo: 'persona', id: campos.persona_id }] : []), compartida: campos.compartida || [], usuario_id: yoId(),
     aviso_cant: campos.aviso_cant || null, aviso_unidad: campos.aviso_unidad || null, alarma: proximoAviso(campos),
     subir_critica: campos.subir_critica === false || campos.subir_critica === 0 ? 0 : 1, duracion: campos.duracion || null, origen: campos.origen || 'manual',
     creada: t, actualizada: t, version: 1, etiquetas: campos.etiquetas || [], checklist: campos.checklist || [], alarma_enviada: 0,
@@ -416,6 +421,7 @@ function cumpleFiltro(n, f) {
     if (!(ks.length ? ks.some(x => f.personas.includes(x)) : f.personas.includes('ninguna'))) return false;
   }
   if (f.conAlarma && !(n.alarma || n.hora_limite || n.aviso_unidad)) return false;
+  if (f.compartidas && !meLaCompartieron(n)) return false;
   if (f.venceSemana) { const fe = fechaEfectiva(n); if (!fe || fe > finSemana()) return false; }
   if (f.estancadas && !estancada(n)) return false;
   return true;
@@ -426,7 +432,7 @@ function cumpleBusqueda(n, q) {
   const texto = norm([n.titulo, n.cuerpo, (n.etiquetas || []).map(id => (etq(id) || {}).nombre).join(' '), textoRespLista(n)].join(' '));
   return t.split(/\s+/).every(p => texto.includes(p.replace(/^#/, '')));
 }
-const filtroActivo = f => !!(f.etiquetas.length || f.prioridades.length || f.personas.length || f.conAlarma || f.venceSemana || f.estancadas);
+const filtroActivo = f => !!(f.etiquetas.length || f.prioridades.length || f.personas.length || f.conAlarma || f.venceSemana || f.estancadas || f.compartidas);
 const rankPrio = p => PRIOS.indexOf(p);
 function ordenar(a, b) {
   return rankPrio(a.prioridad) - rankPrio(b.prioridad)
@@ -734,7 +740,8 @@ function textoCuando(n) {
 function filaNota(n) {
   const tags = (n.etiquetas || []).map(etq).filter(Boolean).map(e => '#' + esc(e.nombre)).join(' ');
   const w = textoCuando(n), quien = textoRespLista(n), comp = esCompartida(n);
-  const who = (comp ? '👥 ' : '') + quien + (!esMia(n) ? (quien ? ' · ' : '') + 'de ' + nombreUsu(n.usuario_id) : '');
+  const ojo = textoComp(n);
+  const who = (comp ? '👥 ' : '') + quien + (!esMia(n) ? (quien ? ' · ' : '') + 'de ' + nombreUsu(n.usuario_id) : '') + (ojo ? ' · 👁 ' + ojo : '');
   if (n.estado === 'realizada' && n.realizada_por && comp) w.extra = (w.extra ? w.extra + ' ' : '') + `<span class="hecha-por">✓ ${esc(nombreUsu(n.realizada_por))}</span>`;
   return `<article class="nota p-${n.prioridad}" data-id="${esc(n.id)}" data-drag="lista" data-titulo="${esc(n.titulo)}" data-cuando="${esc(cuandoCorto(n).t)}">
     <button class="tick" data-act="hecha" data-id="${esc(n.id)}" aria-label="Marcar como realizada: ${esc(n.titulo)}"></button>
@@ -765,6 +772,7 @@ function chipsFiltro() {
   if (f.prioridades.length) out.push(f.prioridades.map(p => PRIO_N[p]).join(', '));
   if (f.personas.length) out.push(f.personas.map(nombreClave).join(', '));
   if (f.conAlarma) out.push('Con avisos');
+  if (f.compartidas) out.push('Compartidas conmigo');
   if (f.venceSemana) out.push('Vencen esta semana');
   if (f.estancadas) out.push('Sin tocar 10+ días');
   return out;
@@ -1254,6 +1262,7 @@ function cambiosParaGrupo(n, v) {
     }
   }
   if (f.conAlarma && !(n.alarma || n.hora_limite || n.aviso_unidad)) omitidos.push('con avisos');
+  if (f.compartidas && !meLaCompartieron(n)) omitidos.push('compartida conmigo');
   if (f.venceSemana) { const fe = fechaEfectiva(n); if (!fe || fe > finSemana()) omitidos.push('vence esta semana'); }
   if (f.estancadas && !estancada(n)) omitidos.push('sin tocar 10+ días');
   return { cambios, partes, omitidos };
@@ -1531,6 +1540,18 @@ function pickResponsables(lista) {
     + usuarios.map(u => `<button type="button" data-act="ed-per" data-t="usuario" data-v="${esc(u.id)}" aria-pressed="${tiene('usuario', u.id)}" aria-label="${esc(u.id === yoId() ? 'Yo' : u.nombre)}, usuario de la app">👤 ${esc(u.id === yoId() ? 'Yo' : u.nombre)}</button>`).join('')
     + personas.map(p => `<button type="button" data-act="ed-per" data-t="persona" data-v="${esc(p.id)}" aria-pressed="${tiene('persona', p.id)}" title="${esc(p.cargo || '')}">${p.usuario_vinculado ? '👤 ' : ''}${esc(p.nombre)}</button>`).join('');
 }
+// 1.10.0: «Compartir con»: usuarios de la app (menos el dueño) que la ven sin ser responsables. Quien ya es
+// responsable sale marcado y no se puede pulsar.
+function pickCompartir(d, n) {
+  const dueno = (n && n.usuario_id) || yoId();
+  const us = [...(S.usuarios || [])].filter(u => u.id !== dueno).sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  if (!us.length) return '';
+  const esResp = id => d.responsables.some(r => r.tipo === 'usuario' && r.id === id);
+  return `<div class="field"><span class="field-label">Compartir con <small>(opcional)</small></span>
+      <div class="per-pick">${us.map(u => `<button type="button" data-act="ed-comp" data-v="${esc(u.id)}" aria-pressed="${esResp(u.id) || d.compartida.includes(u.id)}" ${esResp(u.id) ? 'disabled title="Ya es responsable"' : ''}>👁 ${esc(u.id === yoId() ? 'Yo' : u.nombre)}</button>`).join('')}</div>
+      <small class="hint">👁 La verá y podrá editarla, pero no es responsable: no recibe los avisos de hora.</small>
+    </div>`;
+}
 // Quién creó la nota y quién la dio por hecha (solo en notas compartidas).
 function infoCompartida(n) {
   if (!n || !esCompartida(n)) return '';
@@ -1552,9 +1573,9 @@ function iniciarEditor(id) {
   const n = id && id !== 'nueva' ? nota(id) : null;
   S.ed = {
     ruta: ruta(), id: n ? n.id : null,
-    d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, responsables: respDe(n).map(r => ({ ...r })), fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
+    d: n ? { titulo: n.titulo, cuerpo: n.cuerpo || '', prioridad: n.prioridad, responsables: respDe(n).map(r => ({ ...r })), compartida: [...compDe(n)], fecha_limite: n.fecha_limite || '', hora_limite: n.hora_limite || '',
         aviso_unidad: n.aviso_unidad || '', aviso_cant: n.aviso_cant || 1, duracion: n.duracion || DURACION_DEF, subir_critica: n.subir_critica !== 0, etiquetas: [...(n.etiquetas || [])], checklist: (n.checklist || []).map(p => ({ ...p })), repetir: n.repetir || '' }
-      : { titulo: '', cuerpo: '', prioridad: 'normal', responsables: respNueva(), fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
+      : { titulo: '', cuerpo: '', prioridad: 'normal', responsables: respNueva(), compartida: [], fecha_limite: (S.prefill || {}).fecha_limite || '', hora_limite: (S.prefill || {}).hora_limite || '',
         aviso_unidad: '', aviso_cant: 1, duracion: DURACION_DEF, subir_critica: true, etiquetas: preEtiquetas(), checklist: [], repetir: '' },
     durOtra: !!(n && n.duracion && !DURACIONES.some(x => x[0] === n.duracion)), durU: unidadDur(n && n.duracion || DURACION_DEF),
     sug: null, sel: 0, enfocar: !n, yoAuto: !n,   // yoAuto: «Yo» puesto por defecto, se quita al elegir a otro
@@ -1593,6 +1614,7 @@ function vistaEditor() {
       <div class="per-pick">${pickResponsables(d.responsables)}<button type="button" class="nuevo" data-act="per-nueva">+ Nuevo</button></div>
       ${(S.usuarios || []).length > 1 ? '<small class="hint">👤 Usuario de la app: verá la nota y recibirá sus avisos.</small>' : ''}
     </div>
+    ${pickCompartir(d, n)}
     <div class="grid2">
       <label class="field"><span>Fecha límite</span><input class="input" type="date" data-ed="fecha_limite" value="${esc(d.fecha_limite)}"></label>
       <div class="field"><span class="field-label">Hora <small>(opcional)</small></span>${selectorHora(d.hora_limite, 'ed')}</div>
@@ -1692,6 +1714,7 @@ function guardarCambiosSilencio() {
   const campos = { titulo: d.titulo.trim(), cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, ...camposFecha(d), duracion: duracionGuardar(d, n), subir_critica: d.subir_critica ? 1 : 0 };
   const cambios = {};
   if (JSON.stringify(respDe(n)) !== JSON.stringify(d.responsables)) Object.assign(cambios, conResp(d.responsables));
+  if (JSON.stringify(compDe(n)) !== JSON.stringify(d.compartida)) cambios.compartida = [...d.compartida];
   for (const k of Object.keys(campos)) if ((n[k] == null ? null : n[k]) !== campos[k] && !(k === 'cuerpo' && (n[k] || '') === campos[k])) cambios[k] = campos[k];
   if (JSON.stringify([...(n.etiquetas || [])].sort()) !== JSON.stringify([...d.etiquetas].sort())) cambios.etiquetas = d.etiquetas;
   const chk = checklistGuardar(d);
@@ -1704,15 +1727,15 @@ function guardarEditor() {
   const titulo = d.titulo.trim();
   if (!titulo) { toast('Escribe un título para la nota.'); $('[data-ed="titulo"]') && $('[data-ed="titulo"]').focus(); return; }
   const campos = {
-    titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, ...conResp(d.responsables),
+    titulo, cuerpo: d.cuerpo.replace(/[ \t]{2,}/g, ' ').trim(), prioridad: d.prioridad, ...conResp(d.responsables), compartida: [...d.compartida],
     ...camposFecha(d), duracion: duracionGuardar(d, e.id ? nota(e.id) : null), subir_critica: d.subir_critica ? 1 : 0, etiquetas: d.etiquetas,
     checklist: checklistGuardar(d),
   };
   if (e.id) {
     const n = nota(e.id), cambios = {};
     for (const k of Object.keys(campos)) {
-      const antes = k === 'etiquetas' ? JSON.stringify([...(n.etiquetas || [])].sort()) : k === 'checklist' ? JSON.stringify(n.checklist || []) : k === 'responsables' ? JSON.stringify(respDe(n)) : n[k] == null ? null : n[k];
-      const ahora = k === 'etiquetas' ? JSON.stringify([...campos[k]].sort()) : ['checklist', 'responsables'].includes(k) ? JSON.stringify(campos[k]) : campos[k];
+      const antes = k === 'etiquetas' ? JSON.stringify([...(n.etiquetas || [])].sort()) : k === 'checklist' ? JSON.stringify(n.checklist || []) : k === 'responsables' ? JSON.stringify(respDe(n)) : k === 'compartida' ? JSON.stringify(compDe(n)) : n[k] == null ? null : n[k];
+      const ahora = k === 'etiquetas' ? JSON.stringify([...campos[k]].sort()) : ['checklist', 'responsables', 'compartida'].includes(k) ? JSON.stringify(campos[k]) : campos[k];
       if (antes !== ahora && !(k === 'cuerpo' && (antes || '') === ahora)) cambios[k] = campos[k];
     }
     if (Object.keys(cambios).length) editarNotaLocal(e.id, cambios);
@@ -1782,6 +1805,7 @@ function vistaFiltros() {
     <section class="field"><span class="field-label">Responsable</span><div class="tags-edit">${listaResponsables().map(x => chip('f-per', x.clave, f.personas.includes(x.clave), (x.usuario ? '👤 ' : '') + esc(x.nombre))).join('')}${chip('f-per', 'ninguna', f.personas.includes('ninguna'), 'Sin asignar')}</div></section>
     <section class="field"><span class="field-label">Otros</span>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="conAlarma" ${f.conAlarma ? 'checked' : ''}>Con avisos</label>
+      ${(S.usuarios || []).length > 1 ? `<label class="check"><input type="checkbox" data-act="f-bool" data-v="compartidas" ${f.compartidas ? 'checked' : ''}>Compartidas conmigo (no soy responsable)</label>` : ''}
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="venceSemana" ${f.venceSemana ? 'checked' : ''}>Vencen esta semana (incluye atrasadas)</label>
       <label class="check"><input type="checkbox" data-act="f-bool" data-v="estancadas" ${f.estancadas ? 'checked' : ''}>Sin tocar desde hace más de ${ESTANCADA_DIAS} días</label>
     </section>`;
@@ -1847,7 +1871,7 @@ function vistaMenu() {
 // ---------- Impresión / PDF ----------
 function imprimir(titulo, notas) {
   const filas = notas.map(n => `<tr><td>${PRIO_N[n.prioridad]}</td><td><b>${esc(n.titulo)}</b>${n.cuerpo ? '<br>' + esc(n.cuerpo).replace(/\n/g, '<br>') : ''}${(n.checklist || []).map(p => '<br>' + (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('')}</td>
-    <td>${(n.etiquetas || []).map(id => '#' + esc((etq(id) || {}).nombre || '')).join(' ')}</td><td>${esc(textoRespPapel(n))}</td>
+    <td>${(n.etiquetas || []).map(id => '#' + esc((etq(id) || {}).nombre || '')).join(' ')}</td><td>${esc(textoRespPapel(n))}${textoComp(n, true) ? '<br>👁 ' + esc(textoComp(n, true)) : ''}</td>
     <td>${n.estado === 'realizada' ? 'Realizada ' + esc(fechaCorta(n.realizada_en)) + (n.realizada_por && esCompartida(n) ? ' por ' + esc(nombreUsu(n.realizada_por)) : '') : n.estado === 'papelera' ? 'Eliminada' : 'Pendiente'}${n.fecha_limite ? '<br>Límite ' + esc(diaCorto(n.fecha_limite) + (n.hora_limite ? ' ' + n.hora_limite : '')) : ''}${textoAviso(n) ? '<br>Aviso ' + esc(textoAviso(n)) : ''}${n.repetir ? '<br>↻ ' + esc(textoRepetir(n.repetir)) : ''}</td></tr>`).join('');
   $('#print').innerHTML = `<h1>${esc(titulo)}</h1><p>${notas.length} notas · ${esc(new Date().toLocaleString('es-ES'))}</p>
     <table><thead><tr><th>Prioridad</th><th>Nota</th><th>Etiquetas</th><th>Asignada a</th><th>Estado y fechas</th></tr></thead><tbody>${filas}</tbody></table>`;
@@ -1871,7 +1895,7 @@ function imprimirReunion(titulo, notas) {
         ${n.cuerpo ? `<div>${esc(n.cuerpo).replace(/\n/g, '<br>')}</div>` : ''}
         ${(n.checklist || []).length ? `<div class="pr-chk">${n.checklist.map(p => (p.hecho ? '☑ ' : '☐ ') + esc(p.t)).join('<br>')}</div>` : ''}
         ${otras || (n.fotos || []).length ? `<div class="pr-gris">${otras}${(n.fotos || []).length ? ` 📷 ${n.fotos.length}` : ''}</div>` : ''}</td>
-      <td>${esc(textoRespPapel(n))}</td>
+      <td>${esc(textoRespPapel(n))}${textoComp(n, true) ? '<br>👁 ' + esc(textoComp(n, true)) : ''}</td>
       <td>${n.fecha_limite ? `<span class="${late ? 'pr-late' : ''}">${late ? 'Venció ' : ''}${esc(diaCorto(n.fecha_limite).replace(',', ''))}${n.hora_limite ? ' ' + n.hora_limite : ''}</span>` : '—'}</td>
       <td></td></tr>`;
   };
@@ -2845,7 +2869,7 @@ function comprobarAlarmas() {
   const ahora = Date.now();
   for (const n of activas()) {
     const clave = n.id + '|' + n.alarma;   // una nota puede tener dos avisos (antes y a la hora límite)
-    if (!n.alarma || S.alarmasVistas.has(clave)) continue;
+    if (!n.alarma || S.alarmasVistas.has(clave) || (meLaCompartieron(n) && !esMia(n))) continue;   // compartida: sin avisos de hora
     const t = Date.parse(n.alarma);
     if (t <= ahora && ahora - t < 15 * 60000) {
       S.alarmasVistas.add(clave);
@@ -2971,8 +2995,14 @@ const ACT = {
     else {
       const auto = S.ed.yoAuto && d.responsables.length === 1 && d.responsables[0].tipo === 'usuario' && d.responsables[0].id === yoId();
       d.responsables = [...(auto ? [] : d.responsables), { tipo: t, id: v }];
+      if (t === 'usuario') d.compartida = d.compartida.filter(x => x !== v);
     }
     S.ed.yoAuto = false;
+    renderOverlay();
+  },
+  'ed-comp': (el) => {
+    const d = S.ed.d, v = el.dataset.v;
+    d.compartida = d.compartida.includes(v) ? d.compartida.filter(x => x !== v) : [...d.compartida, v];
     renderOverlay();
   },
   'ed-dur': (el) => {
@@ -3011,7 +3041,7 @@ const ACT = {
     const n = nota(id); if (!n) return;
     const copia = crearNotaLocal({
       titulo: (n.titulo + ' (copia)').slice(0, 200), cuerpo: n.cuerpo || '', prioridad: n.prio_antes || n.prioridad, etiquetas: [...(n.etiquetas || [])],
-      ...conResp(respDe(n).map(r => ({ ...r }))), ...camposFecha({ ...n, repetir: n.repetir || '' }), duracion: n.duracion || null,
+      ...conResp(respDe(n).map(r => ({ ...r }))), compartida: [...compDe(n)], ...camposFecha({ ...n, repetir: n.repetir || '' }), duracion: n.duracion || null,
       subir_critica: n.subir_critica !== 0 ? 1 : 0, checklist: (n.checklist || []).map(x => ({ t: x.t, hecho: false })), origen: 'manual',
     });
     S.ed = null;

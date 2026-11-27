@@ -238,6 +238,7 @@ body.arrastrando, body.arrastrando * { cursor: grabbing !important; user-select:
 .per-pick button { min-height: 40px; padding: 0 14px; border-radius: 20px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font-weight: 600; }
 .per-pick button[aria-pressed="true"] { border: 2px solid var(--primary); background: var(--tint); color: var(--primary); font-weight: 700; }
 .per-pick button.nuevo { border-style: dashed; color: var(--primary); }
+.per-pick button:disabled { opacity: .5; cursor: default; }   /* «Compartir con»: ya es responsable */
 .active-filters { display: flex; gap: 6px; flex-wrap: wrap; padding: 4px 16px 0; }
 .active-filters .tag { font-weight: 500; }
 

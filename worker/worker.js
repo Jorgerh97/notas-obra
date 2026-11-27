@@ -177,6 +177,7 @@ const COLUMNAS_NUEVAS = [
   ['suscripciones', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['archivos', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"], ['cambios', 'usuario_id', "TEXT NOT NULL DEFAULT 'yo'"],
   ['usuarios', 'puede_dictar', 'INTEGER DEFAULT 0'],   // fase 2: el principal puede siempre (puedeDictar)
   ['notas', 'realizada_por', 'TEXT'], ['personas', 'usuario_vinculado', 'TEXT'],   // fase 3
+  ['nota_responsables', 'papel', "TEXT DEFAULT 'r'"],   // 1.10.0: 'r' responsable, 'c' compartida con (solo usuarios)
 ];
 let schemaOk = false;
 async function ensureSchema(env) {
@@ -236,18 +237,31 @@ const setCfgU = (env, clave, valor) => run(env, `INSERT INTO config_usuario (usu
 // ---------- Notas visibles y responsables (fase 3) ----------
 // Notas que ve el usuario env.U: las suyas y, salvo en la papelera, aquellas de las que es responsable
 // (directamente o a través de una persona vinculada a él). Se usa con ...vis(env).
-const VISIBLE = `(notas.usuario_id = ? OR (notas.estado != 'papelera' AND EXISTS (SELECT 1 FROM nota_responsables r WHERE r.nota_id = notas.id
-  AND ((r.tipo = 'usuario' AND r.ref_id = ?) OR (r.tipo = 'persona' AND r.ref_id IN (SELECT id FROM personas WHERE usuario_vinculado = ?))))))`;
+// 1.10.0: también las compartidas con él. VISIBLE_RESP deja fuera las que solo tiene compartidas (resumen matutino).
+const visibleSql = soloResp => `(notas.usuario_id = ? OR (notas.estado != 'papelera' AND EXISTS (SELECT 1 FROM nota_responsables r WHERE r.nota_id = notas.id
+  ${soloResp ? "AND COALESCE(r.papel, 'r') != 'c'" : ''} AND ((r.tipo = 'usuario' AND r.ref_id = ?) OR (r.tipo = 'persona' AND r.ref_id IN (SELECT id FROM personas WHERE usuario_vinculado = ?))))))`;
+const VISIBLE = visibleSql(false), VISIBLE_RESP = visibleSql(true);
 const vis = env => [env.U, env.U, env.U];
 const RESP_MAX = 10;
+// Responsables ({ tipo, id }) y usuarios con los que está compartida (ids) de cada nota: { r: {nota: [...]}, c: {nota: [...]} }.
 async function responsablesDe(env, ids) {
-  const mapa = {};
+  const r = {}, c = {};
   for (let i = 0; i < ids.length; i += 90) {
     const trozo = ids.slice(i, i + 90);
-    const filas = await all(env, `SELECT nota_id, tipo, ref_id FROM nota_responsables WHERE nota_id IN (${trozo.map(() => '?').join(',')}) ORDER BY asignado_en, rowid`, ...trozo);
-    for (const f of filas) (mapa[f.nota_id] = mapa[f.nota_id] || []).push({ tipo: f.tipo, id: f.ref_id });
+    const filas = await all(env, `SELECT nota_id, tipo, ref_id, papel FROM nota_responsables WHERE nota_id IN (${trozo.map(() => '?').join(',')}) ORDER BY asignado_en, rowid`, ...trozo);
+    for (const f of filas) {
+      if (f.papel === 'c') (c[f.nota_id] = c[f.nota_id] || []).push(f.ref_id);
+      else (r[f.nota_id] = r[f.nota_id] || []).push({ tipo: f.tipo, id: f.ref_id });
+    }
   }
-  return mapa;
+  return { r, c };
+}
+const ponerReparto = (n, rep) => { n.responsables = rep.r[n.id] || []; n.compartida = rep.c[n.id] || []; };
+// Usuarios con los que se comparte: activos, sin el dueño ni quien ya es responsable, sin repetidos.
+async function limpiarCompartida(env, lista, dueno, resp) {
+  const usuarios = new Set((await all(env, 'SELECT id FROM usuarios WHERE activo = 1')).map(r => r.id));
+  const fuera = new Set([dueno, ...(resp || []).filter(r => r.tipo === 'usuario').map(r => r.id)]);
+  return [...new Set((Array.isArray(lista) ? lista : []).filter(id => usuarios.has(id) && !fuera.has(id)))].slice(0, RESP_MAX);
 }
 // Lista de responsables recibida: solo usuarios activos y personas que existen, sin repetidos. El dueño también puede estar (1.9.1).
 async function limpiarResponsables(env, lista) {
@@ -272,41 +286,52 @@ async function responsablesDelCuerpo(env, b, actuales) {
   }
   return null;
 }
-// Usuarios que participan en una nota (activos): su dueño y los responsables con cuenta o personas vinculadas.
-async function participantes(env, notaId) {
+// Usuarios que participan en una nota (activos): su dueño, los responsables con cuenta o personas vinculadas
+// y, salvo con soloResp (avisos de hora), los usuarios con los que está compartida.
+async function participantes(env, notaId, soloResp = false) {
+  const papel = soloResp ? "AND COALESCE(papel, 'r') != 'c'" : '';
   const filas = await all(env, `SELECT usuario_id AS u FROM notas WHERE id = ?
-    UNION SELECT ref_id FROM nota_responsables WHERE nota_id = ? AND tipo = 'usuario'
+    UNION SELECT ref_id FROM nota_responsables WHERE nota_id = ? AND tipo = 'usuario' ${papel}
     UNION SELECT p.usuario_vinculado FROM nota_responsables r JOIN personas p ON p.id = r.ref_id
       WHERE r.nota_id = ? AND r.tipo = 'persona' AND p.usuario_vinculado IS NOT NULL`, notaId, notaId, notaId);
   const activos = new Set((await all(env, 'SELECT id FROM usuarios WHERE activo = 1')).map(r => r.id));
   return [...new Set(filas.map(f => f.u))].filter(u => activos.has(u));
 }
-// Guarda los responsables (conserva quién y cuándo asignó a los que ya estaban; persona_id = primera persona,
-// para la app antigua) y devuelve los usuarios que acaban de entrar, para avisarles.
-async function ponerResponsables(env, notaId, lista) {
+// Guarda los responsables y los usuarios con los que se comparte (null = ese apartado no cambia). Conserva quién y
+// cuándo asignó a los que ya estaban; persona_id = primera persona, para la app antigua. Quien pasa a responsable
+// deja de estar en «compartida». Devuelve los usuarios que acaban de entrar, para avisarles: { asignados, compartidos }.
+async function ponerResponsables(env, notaId, lista, compartir = null) {
   const antes = await participantes(env, notaId);
-  const previos = Object.fromEntries((await all(env, 'SELECT tipo, ref_id, asignado_por, asignado_en FROM nota_responsables WHERE nota_id = ?', notaId))
-    .map(r => [r.tipo + ':' + r.ref_id, r]));
+  const filas = await all(env, 'SELECT tipo, ref_id, asignado_por, asignado_en, papel FROM nota_responsables WHERE nota_id = ?', notaId);
+  const previos = Object.fromEntries(filas.map(r => [r.tipo + ':' + r.ref_id, r]));
+  const resp = lista || filas.filter(r => r.papel !== 'c').map(r => ({ tipo: r.tipo, id: r.ref_id }));
+  const dueno = ((await first(env, 'SELECT usuario_id FROM notas WHERE id = ?', notaId)) || {}).usuario_id;
+  const comp = await limpiarCompartida(env, compartir || filas.filter(r => r.papel === 'c').map(r => r.ref_id), dueno, resp);
   const t = now();
   const ops = [env.DB.prepare('DELETE FROM nota_responsables WHERE nota_id = ?').bind(notaId)];
-  for (const r of lista) {
+  for (const [r, papel] of [...resp.map(r => [r, 'r']), ...comp.map(id => [{ tipo: 'usuario', id }, 'c'])]) {
     const prev = previos[r.tipo + ':' + r.id];
-    ops.push(env.DB.prepare('INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en) VALUES (?, ?, ?, ?, ?)')
-      .bind(notaId, r.tipo, r.id, prev ? prev.asignado_por : env.U, prev ? prev.asignado_en : t));
+    const igual = prev && (prev.papel === 'c') === (papel === 'c');   // cambiar de papel cuenta como asignar de nuevo
+    ops.push(env.DB.prepare('INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en, papel) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(notaId, r.tipo, r.id, igual ? prev.asignado_por : env.U, igual ? prev.asignado_en : t, papel));
   }
-  const persona = lista.find(r => r.tipo === 'persona');
+  const persona = resp.find(r => r.tipo === 'persona');
   ops.push(env.DB.prepare('UPDATE notas SET persona_id = ? WHERE id = ?').bind(persona ? persona.id : null, notaId));
   await env.DB.batch(ops);
-  return (await participantes(env, notaId)).filter(u => !antes.includes(u) && u !== env.U);
+  const nuevos = (await participantes(env, notaId)).filter(u => !antes.includes(u) && u !== env.U);
+  return { asignados: nuevos.filter(u => !comp.includes(u)), compartidos: nuevos.filter(u => comp.includes(u)) };
 }
 const nombreUsuario = async (env, id) => ((await first(env, 'SELECT nombre FROM usuarios WHERE id = ?', id)) || {}).nombre || 'Alguien';
 async function avisarUsuarios(env, ids, datos) {
   for (const u of ids) await avisarTodos(conUsuario(env, u), datos);
 }
 async function avisarAsignados(env, nota, nuevos) {
-  if (!nota || !nuevos.length) return;
-  await avisarUsuarios(env, nuevos, { tipo: 'info', tag: 'asignada-' + nota.id, titulo: 'Te han asignado una nota',
-    cuerpo: ((await nombreUsuario(env, env.U)) + ': ' + nota.titulo).slice(0, 180), url: '#/nota/' + nota.id });
+  if (!nota || !nuevos) return;
+  const quien = await nombreUsuario(env, env.U);
+  if (nuevos.asignados.length) await avisarUsuarios(env, nuevos.asignados, { tipo: 'info', tag: 'asignada-' + nota.id, titulo: 'Te han asignado una nota',
+    cuerpo: (quien + ': ' + nota.titulo).slice(0, 180), url: '#/nota/' + nota.id });
+  if (nuevos.compartidos.length) await avisarUsuarios(env, nuevos.compartidos, { tipo: 'info', tag: 'asignada-' + nota.id, titulo: 'Te han compartido una nota',
+    cuerpo: (quien + ': ' + nota.titulo).slice(0, 180), url: '#/nota/' + nota.id });
 }
 async function avisarHecha(env, nota) {
   if (!nota) return;
@@ -328,8 +353,8 @@ async function traspasarPersona(env, personaId, usuarioId) {
     WHERE r.tipo = 'persona' AND r.ref_id = ?`, personaId);
   const t = now(), ops = [];
   for (const n of notas) {
-    ops.push(env.DB.prepare(`INSERT OR IGNORE INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en) VALUES (?, 'usuario', ?, ?, ?)`)
-      .bind(n.nota_id, u.id, env.U, t));
+    ops.push(env.DB.prepare(`INSERT INTO nota_responsables (nota_id, tipo, ref_id, asignado_por, asignado_en, papel) VALUES (?, 'usuario', ?, ?, ?, 'r')
+      ON CONFLICT(nota_id, tipo, ref_id) DO UPDATE SET papel = 'r'`).bind(n.nota_id, u.id, env.U, t));   // si la tenía compartida, pasa a responsable
     ops.push(env.DB.prepare(`DELETE FROM nota_responsables WHERE nota_id = ? AND tipo = 'persona' AND ref_id = ?`).bind(n.nota_id, personaId));
     // persona_id = la primera persona que quede (app antigua); la versión sube para que los dispositivos la recojan.
     ops.push(env.DB.prepare(`UPDATE notas SET persona_id = (SELECT ref_id FROM nota_responsables WHERE nota_id = notas.id AND tipo = 'persona' ORDER BY asignado_en, rowid LIMIT 1),
@@ -354,8 +379,8 @@ async function registroHechas(env) {
     WHERE r.nota_id = notas.id AND COALESCE(CASE WHEN r.tipo = 'usuario' THEN r.ref_id ELSE p.usuario_vinculado END, notas.usuario_id) != notas.usuario_id)`;
   const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE estado = 'realizada' AND ${compartida}
     ${env.A ? '' : 'AND ' + VISIBLE} ORDER BY realizada_en DESC LIMIT 2000`, ...(env.A ? [] : vis(env)));
-  const ids = notas.map(n => n.id), mapa = await etiquetasDe(env, ids), resp = await responsablesDe(env, ids);
-  for (const n of notas) { n.etiquetas = mapa[n.id] || []; n.responsables = resp[n.id] || []; prepararNota(n); }
+  const ids = notas.map(n => n.id), mapa = await etiquetasDe(env, ids), rep = await responsablesDe(env, ids);
+  for (const n of notas) { n.etiquetas = mapa[n.id] || []; ponerReparto(n, rep); prepararNota(n); }
   const usuarios = await all(env, 'SELECT id, nombre FROM usuarios ORDER BY nombre');   // también los desactivados
   return { notas, usuarios, todos: !!env.A };
 }
@@ -442,7 +467,7 @@ function proximaRepeticion(n) {
     prioridad: n.prio_antes || n.prioridad, persona_id: n.persona_id, fecha_limite: f, hora_limite: n.hora_limite,
     aviso_unidad: n.aviso_unidad, aviso_cant: n.aviso_cant, duracion: n.duracion, subir_critica: n.subir_critica,
     checklist: (n.checklist || []).map(p => ({ t: p.t, hecho: false })), etiquetas: n.etiquetas || [], origen: 'app',
-    responsables: n.responsables || [],
+    responsables: n.responsables || [], compartida: n.compartida || [],
   };
 }
 
@@ -519,7 +544,7 @@ async function leerNota(env, id) {
   const n = await first(env, `SELECT ${NOTA_COLS} FROM notas WHERE id = ? AND ${VISIBLE}`, id, ...vis(env));
   if (!n) return null;
   n.etiquetas = (await all(env, 'SELECT etiqueta_id FROM nota_etiquetas WHERE nota_id = ?', id)).map(r => r.etiqueta_id);
-  n.responsables = (await responsablesDe(env, [id]))[id] || [];
+  ponerReparto(n, await responsablesDe(env, [id]));
   return prepararNota(n);
 }
 
@@ -610,7 +635,7 @@ async function crearNota(env, b, dispositivo, { avisar = true } = {}) {
   await ponerEtiquetas(env, id, b.etiquetas);
   // Si no se indica nada, la nota es de quien la crea; una lista vacía es «Nadie».
   const resp = Array.isArray(b.responsables) || isId(b.persona_id) ? await responsablesDelCuerpo(env, b, []) : [{ tipo: 'usuario', id: env.U }];
-  const nuevos = await ponerResponsables(env, id, resp);
+  const nuevos = await ponerResponsables(env, id, resp, Array.isArray(b.compartida) ? b.compartida : []);
   await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)', id, env.U, t, dispositivo, 'crear', null);
   const nota = await leerNota(env, id);
   if (avisar) await avisarAsignados(env, nota, nuevos);
@@ -639,7 +664,8 @@ async function editarNota(env, ctx, id, b, dispositivo) {
   await run(env, `UPDATE notas SET ${cols.map(k => k + ' = ?').join(', ')}, version = version + 1 WHERE id = ?`, ...cols.map(k => c[k]), id);
   if (Array.isArray(b.etiquetas)) await ponerEtiquetas(env, id, b.etiquetas);
   const resp = await responsablesDelCuerpo(env, b, antes.responsables);
-  const nuevos = resp ? await ponerResponsables(env, id, resp) : [];
+  const comp = Array.isArray(b.compartida) ? b.compartida : null;
+  const nuevos = resp || comp ? await ponerResponsables(env, id, resp, comp) : null;
   await run(env, 'INSERT INTO cambios (nota_id, usuario_id, fecha, dispositivo, accion, antes) VALUES (?, ?, ?, ?, ?, ?)',
     id, env.U, t, dispositivo, c.estado && c.estado !== antes.estado ? 'estado:' + c.estado : 'editar', JSON.stringify(antes));
   await seguirSerie(env, antes, c.estado, dispositivo);
@@ -761,8 +787,8 @@ async function guardarVista(env, id, b) {
 
 async function leerDatos(env) {
   const notas = await all(env, `SELECT ${NOTA_COLS} FROM notas WHERE ${VISIBLE} ORDER BY creada`, ...vis(env));
-  const mapa = await etiquetasDe(env, notas.map(n => n.id)), resp = await responsablesDe(env, notas.map(n => n.id));
-  for (const n of notas) { n.etiquetas = mapa[n.id] || []; n.responsables = resp[n.id] || []; prepararNota(n); }
+  const mapa = await etiquetasDe(env, notas.map(n => n.id)), rep = await responsablesDe(env, notas.map(n => n.id));
+  for (const n of notas) { n.etiquetas = mapa[n.id] || []; ponerReparto(n, rep); prepararNota(n); }
   const etiquetas = await all(env, 'SELECT id, nombre, tipo, alias, cerrada, cerrada_en, usuario_id AS creada_por FROM etiquetas ORDER BY nombre');
   const personas = await all(env, 'SELECT id, nombre, cargo, usuario_vinculado, usuario_id AS creada_por FROM personas ORDER BY nombre');
   const usuarios = await all(env, 'SELECT id, nombre FROM usuarios WHERE activo = 1 ORDER BY nombre');   // para elegir responsables
@@ -990,6 +1016,7 @@ fecha AAAA-MM-DD y hora HH:MM (24 h) solo si se dicen; en obra, «a las 3» es 1
 aviso: solo si se pide aviso con antelación (horas 1-12, dias 1-7, semanas 1-4).
 etiquetas: obras, industriales o temas tal como se nombran (por ejemplo «Obra123» o «la de Sabadell»); la app solo pone las que ya existen.
 responsables: nombres de las personas a quien va la tarea; la app solo pone los que ya existen. Si no se dice nadie, no lo rellenes: la nota queda asignada al propio usuario. Usa «yo» si la comparte con otros y «nadie» solo si pide dejarla sin asignar.
+compartir_con: usuarios de la app que deben verla y estar al tanto sin ser responsables (p. ej. «compártela con Julián», «que lo vea Julián»).
 checklist: solo si se enumeran pasos. repetir: laborables, semanal, quincenal o mensual. duracion_minutos: solo si se dice cuánto dura.
 Después de crearlas, resume en una línea lo creado y los avisos que devuelva la herramienta.`,
     inputSchema: {
@@ -1008,6 +1035,7 @@ Después de crearlas, resume en una línea lo creado y los avisos que devuelva l
               aviso: { type: 'object', properties: { unidad: { type: 'string', enum: ['horas', 'dias', 'semanas'] }, cantidad: { type: 'integer' } }, required: ['unidad', 'cantidad'] },
               etiquetas: { type: 'array', items: { type: 'string' } },
               responsables: { type: 'array', items: { type: 'string' } },
+              compartir_con: { type: 'array', items: { type: 'string' } },
               checklist: { type: 'array', items: { type: 'string' } },
               repetir: { type: 'string', enum: REPETIR },
               duracion_minutos: { type: 'integer' },
@@ -1072,6 +1100,12 @@ async function crearNotasMcp(env, args) {
       if (f) { if (!resp.some(r => r.tipo === f.r.tipo && r.id === f.r.id)) resp.push(f.r); } else avisos.push(`«${titulo}»: el responsable «${txt(nombre, 40)}» no existe y no se ha puesto.`);
     }
     if (!resp.length && !nadie) resp.push(yoMismo);   // por defecto, de quien la crea
+    const comp = [];   // 1.10.0: compartir con usuarios de la app (la ven, sin ser responsables)
+    for (const nombre of Array.isArray(x.compartir_con) ? x.compartir_con.slice(0, 10) : []) {
+      const f = cat.responsable(String(nombre));
+      const u = f && (f.r.tipo === 'usuario' ? f.r.id : ((await first(env, 'SELECT usuario_vinculado AS u FROM personas WHERE id = ?', f.r.id)) || {}).u);
+      if (u) { if (u !== env.U && !comp.includes(u)) comp.push(u); } else avisos.push(`«${titulo}»: «${txt(nombre, 40)}» no es usuario de la app y no se ha podido compartir.`);
+    }
     const { fecha_limite, hora_limite } = fechaHoraDictado({ fecha_limite: x.fecha || '', hora_limite: x.hora || '' });
     if ((x.fecha && !fecha_limite) || (x.hora && !hora_limite)) avisos.push(`«${titulo}»: la fecha u hora no se ha entendido y se ha dejado sin ella.`);
     const uni = x.aviso && AVISO_MCP[norm(x.aviso.unidad)], cant = x.aviso && Number(x.aviso.cantidad);
@@ -1080,11 +1114,11 @@ async function crearNotasMcp(env, args) {
     const nota = await crearNota(env, {
       titulo, cuerpo: txt(x.descripcion, 4000).trim(), prioridad: PRIO_MCP[norm(x.prioridad)] || 'normal',
       fecha_limite: fecha_limite || null, hora_limite: hora_limite || null, ...aviso,
-      etiquetas, responsables: resp, checklist: (Array.isArray(x.checklist) ? x.checklist : []).map(t => ({ t: txt(t, 200), hecho: false })),
+      etiquetas, responsables: resp, compartida: comp, checklist: (Array.isArray(x.checklist) ? x.checklist : []).map(t => ({ t: txt(t, 200), hecho: false })),
       repetir: REPETIR.includes(x.repetir) && fecha_limite ? x.repetir : null, ...(dur ? { duracion: dur } : {}), origen: 'claude',
     }, 'Claude (conector)');
     const prio = { critica: 'Urgente', alta: 'Alta', normal: 'Normal', baja: 'Baja' }[nota.prioridad];
-    lineas.push(`- «${nota.titulo}» · ${prio}${fechaMcpTexto(nota) ? ' · ' + fechaMcpTexto(nota) : ''}${etiquetas.length ? ' · ' + etiquetas.length + (etiquetas.length === 1 ? ' etiqueta' : ' etiquetas') : ''}${resp.some(r => r.id !== env.U) ? ' · ' + resp.length + (resp.length === 1 ? ' responsable' : ' responsables') : ''}`);
+    lineas.push(`- «${nota.titulo}» · ${prio}${fechaMcpTexto(nota) ? ' · ' + fechaMcpTexto(nota) : ''}${etiquetas.length ? ' · ' + etiquetas.length + (etiquetas.length === 1 ? ' etiqueta' : ' etiquetas') : ''}${resp.some(r => r.id !== env.U) ? ' · ' + resp.length + (resp.length === 1 ? ' responsable' : ' responsables') : ''}${nota.compartida.length ? ' · compartida con ' + nota.compartida.length : ''}`);
   }
   if (lineas.length) await run(env, 'UPDATE mcp_claves SET notas = COALESCE(notas, 0) + ? WHERE usuario_id = ?', lineas.length, env.U);
   const cab = lineas.length ? (lineas.length === 1 ? 'Creada 1 nota:' : `Creadas ${lineas.length} notas:`) : 'No se ha creado ninguna nota.';
@@ -1249,7 +1283,7 @@ async function avisarTodos(env, datos) {
 // Retira el aviso de una nota en los demás dispositivos. En iPhone no se envía: Safari exige mostrar
 // una notificación por cada mensaje recibido y retiraría el permiso.
 async function cerrarAvisos(env, notaId, excepto) {
-  const us = await participantes(env, notaId);
+  const us = await participantes(env, notaId, true);
   if (!us.length) return;
   const subs = await all(env, `SELECT * FROM suscripciones WHERE activo = 1 AND usuario_id IN (${us.map(() => '?').join(',')})`, ...us);
   await Promise.all(subs.filter(s => s.endpoint !== excepto && !s.endpoint.includes('push.apple.com'))
@@ -1268,8 +1302,8 @@ async function enviarAlarmas(env) {
     const titulo = (n.prioridad === 'critica' ? '⚠ ' : '') + n.titulo;
     const limite = n.fecha_limite ? 'Fecha límite: ' + diaEs(n.fecha_limite) + (n.hora_limite ? ' a las ' + n.hora_limite : '') : '';
     const cuerpo = [limite, n.cuerpo || ''].filter(Boolean).join(' · ').slice(0, 180);
-    // A todos los que participan: dueño y responsables con cuenta (solo usuarios activos).
-    await avisarUsuarios(env, await participantes(env, n.id), { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
+    // Al dueño y a los responsables con cuenta (solo usuarios activos); no a quien solo la tiene compartida.
+    await avisarUsuarios(env, await participantes(env, n.id, true), { tipo: 'alarma', nota_id: n.id, titulo, cuerpo, tag: 'nota-' + n.id });
   }
 }
 
@@ -1353,7 +1387,7 @@ async function resumenMatutino(env, ms = Date.now()) {
       SUM(prioridad = 'critica') AS urgentes,
       SUM(fecha_limite = ? AND hora_limite IS NOT NULL) AS con_hora,
       SUM(actualizada < ?) AS estancadas
-    FROM notas WHERE estado = 'activa' AND ${VISIBLE}`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), ...vis(env));
+    FROM notas WHERE estado = 'activa' AND ${VISIBLE_RESP}`, p.fecha, plus(-ESTANCADA_DIAS, new Date(ms).toISOString()), ...vis(env));
   const partes = [[n.urgentes, 'urgente', 'urgentes'], [n.con_hora, 'con hora hoy', 'con hora hoy'], [n.estancadas, 'sin tocar', 'sin tocar']]
     .filter(([k]) => k > 0).map(([k, uno, varios]) => k + ' ' + (k === 1 ? uno : varios));
   if (!partes.length) return null;

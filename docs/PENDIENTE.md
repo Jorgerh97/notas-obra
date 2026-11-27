@@ -2,6 +2,13 @@
 
 Propuesto a Jorge y sin decidir: no hacer nada hasta que él lo pida.
 
+## Versión 1.10.0 (27 nov 2026): «Compartir con» — sin publicar
+- Además de los responsables, una nota se puede compartir con usuarios de la app (no con personas sin cuenta). Quien la tiene compartida la ve y puede editarla y marcarla hecha (como un responsable), recibe «Te han compartido una nota» y «Nota hecha», pero **no** los avisos de hora ni cuenta en el resumen matutino. No sale en el filtro «Responsable: X»; tiene su filtro «Compartidas conmigo» (en Otros). En listas y papel aparece con 👁.
+- Base: columna nueva `nota_responsables.papel` (`'r'` responsable, por defecto; `'c'` compartida). Solo se añade la columna (se crea sola al arrancar el worker); las filas actuales quedan como `'r'`.
+- Worker: las notas llevan `compartida: [ids de usuario]` aparte de `responsables`. `POST/PUT /notas` aceptan `compartida`; si no llega, no se toca (la app 1.9 sigue funcionando). Se quitan el dueño y quien ya es responsable; hacer responsable a alguien lo saca de «compartida». `participantes(env, id, true)` (solo responsables) para alarmas y cierre de avisos; `VISIBLE_RESP` para el resumen matutino. Conector: campo `compartir_con`.
+- App: apartado «Compartir con» en el editor (👁; quien ya es responsable sale desactivado). Los avisos locales de la app no suenan en notas que solo tienes compartidas.
+- Probado: 323 pruebas automáticas y en el navegador con servidor local (editor, guardado, lista, ancho de móvil). Sin probar en el entorno dev ni en producción. Publicar el worker antes que la app.
+
 ## Versión 1.9.1 (25 nov 2026): notas asignadas a uno mismo por defecto — publicada el 27 nov 2026 (worker d1885fef)
 - Al crear una nota sin indicar responsable, queda asignada a quien la crea (se guarda como fila `usuario` del dueño en `nota_responsables`; sin cambio de esquema). Vale para nota nueva, calendario, dictado, importar CSV/.ics y conector. `responsables: []` es «Nadie» y se respeta.
 - App: botón «Yo» en el editor, marcado por defecto; en una nota nueva, elegir a otro lo sustituye y «Yo» se puede volver a pulsar para estar los dos. Con un responsable o «Sin asignar» como filtro activo, manda el filtro. Revisión del dictado: «Yo» (defecto), «Nadie» o una persona. Arrastrar a un responsable una nota que solo tiene su dueño la pasa a ese responsable. Si solo la tiene el dueño, no se escribe en las listas ni cuenta como compartida.
